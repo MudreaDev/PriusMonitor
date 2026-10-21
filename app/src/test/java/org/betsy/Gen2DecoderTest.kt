@@ -62,6 +62,15 @@ class Gen2DecoderTest {
     }
 
     @Test
+    fun standaloneCfAcceptsTheMeasuredSixteenBytePayload() {
+        val m = BatteryModel(blockCount = 14)
+        Gen2Decoder.decodeCf("61CF8CD180C54EAA000900008C498C1B8C54", m, false)
+        assertEquals(13.8f, m.aux12V, 0.01f)
+        assertEquals(31.45f, m.temps.first(), 0.01f)
+        assertEquals(31.56f, m.temps.last(), 0.01f)
+    }
+
+    @Test
     fun combinedN14() {
         val m = BatteryModel(blockCount = 14)
         Gen2Decoder.decodeCombined(combinedResponse(14, fifteen = false), m, fifteenBlockVariant = false)

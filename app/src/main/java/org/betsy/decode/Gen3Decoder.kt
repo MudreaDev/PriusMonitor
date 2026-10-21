@@ -38,7 +38,7 @@ object Gen3Decoder {
     ) {
         val i = Normalize.requireTag(r, "6187")
         val k = i + 8 // +8 skips the intake-air word (§5.1)
-        Normalize.requireLength(r, i + 24, "2187")
+        Normalize.requireLength(r, i + 20, "2187")
         val temps = MutableList(3) { 0f }
         for (idx in 0 until 3) {
             temps[idx] = Normalize.u16(r, k + idx * 4) / 256f - 50f // °C
@@ -78,7 +78,7 @@ object Gen3Decoder {
         m: BatteryModel,
     ) {
         val i = Normalize.requireTag(r, "6198")
-        Normalize.requireLength(r, i + 12, "2198")
+        Normalize.requireLength(r, i + 14, "2198")
         m.currentAmps = Normalize.u16(r, i + 4) / 100f - 327.68f
         m.maxChargeHp = (Normalize.u8(r, i + 8) / 2f - 64f) * 1.34f
         m.maxDischargeHp = (Normalize.u8(r, i + 10) / 2f - 64f) * 1.34f

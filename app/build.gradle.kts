@@ -1,3 +1,5 @@
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 import java.util.Properties
 
 plugins {
@@ -22,7 +24,7 @@ val keystoreProps =
 // The one place the version is written. release-please rewrites the literal below when it cuts a
 // release, the trailing marker is how it finds the line, so do not move or reword it. versionCode
 // is derived from it so there is never a second number to remember to bump.
-val betsyVersionName = "0.0.7" // x-release-please-version
+val betsyVersionName = "1.0.0" // x-release-please-version
 
 val betsyVersionCode =
     betsyVersionName.substringBefore("-").split(".").let { (major, minor, patch) ->
@@ -56,30 +58,19 @@ val betsyGitHash = gitShortIdentity()
 // Wall-clock stamp of this Gradle configuration, local time. Rebuilds always refresh it so the
 // hero can tell two installs of the same hash apart (dirty trees especially). Avoid java.time /
 // java.util here: the Android Gradle DSL shadows the `java` package name.
-val betsyBuildTime =
-    try {
-        ProcessBuilder("date", "+%Y-%m-%d %H:%M")
-            .redirectErrorStream(true)
-            .start()
-            .inputStream
-            .bufferedReader()
-            .readText()
-            .trim()
-            .ifBlank { "unknown" }
-    } catch (_: Exception) {
-        "unknown"
-    }
+val betsyBuildTime = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
 
 android {
     namespace = "org.betsy"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "org.betsy"
+        applicationId = "ro.priusmonitor.app"
         minSdk = 26
         targetSdk = 34
         versionCode = betsyVersionCode
         versionName = betsyVersionName
+        testInstrumentationRunner = "org.betsy.monitor.MonitorInstrumentation"
         buildConfigField("String", "GIT_HASH", "\"$betsyGitHash\"")
         buildConfigField("String", "BUILD_TIME", "\"$betsyBuildTime\"")
         // Hero overlay: "0.0.1 · a1b2c3d+ · <build time>"

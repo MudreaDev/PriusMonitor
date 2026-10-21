@@ -1,8 +1,7 @@
 name: release-please
 
 on:
-  push:
-    branches: [main]
+  # Keep upstream release automation opt-in for the Prius Monitor fork.
   workflow_dispatch:
 
 permissions:

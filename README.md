@@ -1,191 +1,70 @@
-# B.E.T.S.Y.
+# Prius Monitor
 
-**Battery, Engine & Toyota Scanner for You**
+Aplicație Android în română pentru Toyota Prius 30 / ZVW30, bazată pe [BETSY](https://github.com/alrighdee/BETSY), cu adaptor ELM327 Bluetooth Classic SPP (inclusiv VIECAR cu acest profil).
 
-![B.E.T.S.Y.](docs/assets/betsy-header-dark.png)
+## Funcții
 
-### Reads and explains Toyota INF diagnostic sub-codes. Open source. Runs on a $3.50 adapter.
-### Looking for captures from real Toyota hybrids.
+- Dashboard cu viteză, turație, temperatură lichid de răcire, SOC HV, tensiune 12 V și grafice.
+- Consum instantaneu și mediu, l/h separat, litri și timp la viteză 0, distanță, durata călătoriei și sugestii explicate.
+- Baterie: 14 blocuri, tensiuni, diferență max–min, rezistențe interne, temperaturi, curent și putere calculată.
+- Sănătate / SOH: informații despre limitele măsurării și înregistrare pasivă a valorilor HV. Fără procent de sănătate inventat.
+- Diagnosticare motor și Toyota hibrid, explicații în română pentru codurile uzuale, rapoarte locale și export cu răspunsurile tehnice ECU.
+- Bluetooth cu permisiuni Android, limite de timp, deconectare și erori explicite.
+- Demo separat, etichetat permanent; setări pentru unități și intervalul de actualizare.
 
-[![Download the APK](https://img.shields.io/github/v/release/alrighdee/BETSY?sort=semver&display_name=tag&style=for-the-badge&label=download%20the%20apk&color=3DDC84)](https://github.com/alrighdee/BETSY/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/alrighdee/BETSY/total?style=for-the-badge&label=downloads&color=2C7BE5)](https://github.com/alrighdee/BETSY/releases)
-[![Build](https://img.shields.io/github/actions/workflow/status/alrighdee/BETSY/ci.yml?branch=main&style=for-the-badge&label=build)](https://github.com/alrighdee/BETSY/actions/workflows/ci.yml)
-[![Licence](https://img.shields.io/github/license/alrighdee/BETSY?style=for-the-badge&label=licence)](LICENSE)
+## Instalare
 
-**Latest release: [0.0.7](https://github.com/alrighdee/BETSY/releases/tag/v0.0.7).** Every release is
-tagged with its signed APK; the [changelog](CHANGELOG.md) lists what changed.
+1. Deschide APK-ul pe un telefon cu Android 8.0 sau mai nou; permite instalarea din sursa respectivă dacă Android o cere.
+2. Introdu adaptorul în portul OBD și asociază-l în setările Bluetooth ale telefonului, folosind PIN-ul indicat de adaptor.
+3. Pregătește mașina pentru citirea ECU (de regulă, READY), cu mașina în siguranță.
+4. Închide Car Scanner și alte aplicații OBD care pot ocupa adaptorul.
+5. Deschide Conexiune în Prius Monitor, acordă accesul Bluetooth și selectează VIECAR.
+6. Fără mașină, folosește Pornește modul Demo. Datele Demo sunt simulate.
 
-## See it run
+Permisiunea Bluetooth trebuie acordată pe telefon la prima utilizare. Nu sunt necesare cont, internet, abonament sau Play Store pentru utilizare. Adaptoarele exclusiv BLE nu sunt acceptate de acest build.
 
-A scan on a 2009 Prius, from picking the adapter through to the codes and their sub-codes. Sped up
-through the connection wait, no audio.
+## Consum și călătorii
 
-<video src="https://github.com/alrighdee/BETSY/raw/main/docs/assets/betsy-demo.mp4" width="320" controls muted playsinline></video>
+Debitul este citit direct din PID 015E dacă ECU îl oferă. Altfel, cu MAF și turație disponibile, se estimează pentru benzină: l/h = MAF[g/s] × 3600 / (14,7 × 745). Estimarea este etichetată; nu identifică sigur tăierea injecției și poate diferi de bord. La turație citită de 0 rpm, consumul de benzină este considerat 0. Energia electrică nu este inclusă.
 
-[Download the clip](docs/assets/betsy-demo.mp4) if the player does not load.
+l/100 km = l/h × 100 / km/h, afișat de la 5 km/h. Media integrează debitul și viteza pe intervalele valide, include opririle și apare după minimum 100 m cu date de consum. Lipsa datelor și intervalele mai lungi de 15 secunde nu creează valori fictive. Acoperirea calculului este afișată.
 
-## Volunteers wanted: two minutes with your hybrid
+**Viteză 0 nu înseamnă Parking.** Litrii și timpul la viteză 0 sunt separați, iar călătoria continuă.
 
-**Every capture helps, and it takes about two minutes.** Any Prius from roughly 2004 to 2015. You
-do not need to know anything about your car beyond that; the app works the rest out itself.
+La deconectare sau trecerea în fundal, conexiunea se închide și ultimul rezumat al călătoriei este păstrat local, exportabil din Setări. Exportul prin selectorul de documente păstrează sesiunea activă. O conexiune nouă începe o călătorie nouă.
 
-**Car with the triangle on? This is the scan the project needs most.** A stored code such as
-`P0AA6`, `P3000` or `P3019` exercises the detail path that a healthy car cannot. It may confirm a
-new fault, vehicle layout or multi-fault combination. Please do send it.
+Rapoartele de diagnostic rămân în spațiul privat al aplicației după repornire; dezinstalarea le șterge. Nu se trimit automat date sau scanări pe internet.
 
-**Car perfectly healthy? Send it too.** Not a consolation prize: healthy captures are the control
-group. They prove the read works across different adapters, firmware and model years, and they are
-what lets a faulty car's all-zero table be read as a real result rather than a failed read. They
-just cannot do the job a faulty car does.
+## Limite
 
-**2010-2015 Prius?** Especially wanted. That generation is written and tested against recorded
-data, but the app has never met an actual one. Yours would be the first.
+Gen 3 este implementat conform decodoarelor BETSY și verificat software. **Nu este declarat validat pe Prius-ul utilizatorului.** Adaptorul și ECU-ul pot refuza parametri, afișați ca — sau note în raport. Nu se substituie valori Demo, zero sau citiri vechi expirate.
 
-1. **[Install the app](https://github.com/alrighdee/BETSY/releases/latest)**
-2. Connect your ELM327 adapter
-3. Open **DTC / INF codes** and let the scan finish
-4. Tap **Contribute scan data**
+Profilul HV vizează pachetul Prius cu 14 blocuri. Nu este un scanner universal pentru orice Toyota. Un rezultat fără coduri nu certifică toate ECU-urile. SOC este încărcarea curentă, nu SOH. Fără un PID SOH documentat sau un test de capacitate validat, SOH rămâne indisponibil. Observațiile tensiunilor nu certifică sănătatea bateriei.
 
-No account, no sign-up, no typing hex into a forum post. The app shows you exactly what it will
-send before it sends anything, and everything it does is a read: it never clears a code, runs an
-actuator test, or writes to an ECU.
+Aplicația citește date. Nu șterge erori și nu include codare, programare, teste de actuatori ori configurarea luminilor.
 
-### Why this is needed
+## Compilare și teste
 
-The repair manuals tell us what the sub-codes *mean*. `P0AA6` with one sub-code is a battery-area
-problem; with another it points at the A/C compressor circuit. BETSY also knows where a Gen2 Prius
-transmits that value: bytes 29–30 of a diagnostic freeze page on the hybrid-control ECU.
+Necesită JDK 17 și Android SDK 34. Configurează app/local.properties cu sdk.dir sau ANDROID_HOME. Din app:
 
-That field has been confirmed on a Gen2 carrying `P0571-115`. BETSY reads all five pages, retains
-the raw responses, and explains a value only when it matches a documented DTC/sub-code pair. On a
-multi-fault car it does not infer ownership from page order, and an ambiguous combination remains
-unresolved instead of becoming a guessed diagnosis.
+```text
+./gradlew check assembleDebug assembleDebugAndroidTest --no-daemon
+```
 
-More captures still matter. Faulty cars validate different codes and combinations; healthy cars
-prove the same read works across adapters, firmware and model years. The decoder, app and evidence
-are open source, so hybrid owners can read the result with an ordinary adapter.
+Pe Windows: gradlew.bat. check execută teste unitare, ktlint și Android Lint. APK: app/build/outputs/apk/debug/PriusMonitor-debug.apk.
 
----
+Cu un emulator pornit, din app:
 
-## FAQ
+```text
+adb install -r build/outputs/apk/debug/PriusMonitor-debug.apk
+adb install -r build/outputs/apk/androidTest/debug/PriusMonitor-debug-androidTest.apk
+adb shell am instrument -w ro.priusmonitor.app.test/org.betsy.monitor.MonitorInstrumentation
+```
 
-### What is BETSY?
+Runner-ul verifică pornirea, Demo, Consum, cele 14 blocuri, scanarea și salvarea rapoartelor, setările și deconectarea. La succes afișează ALL ... DEVICE CHECKS PASSED.
 
-An Android app that reads hybrid battery data and trouble codes from Toyota hybrids using an
-ordinary ELM327 adapter. No dealer tool, no proprietary cable, no subscription.
+GitHub Actions produce artifactul PriusMonitor-debug-apk după verificări. APK-urile debug produse în medii diferite pot avea semnături diferite și pot necesita dezinstalarea versiunii vechi înaintea instalării.
 
-### Which cars work?
+## Licență
 
-| Car | Status |
-|---|---|
-| Prius, 2004-2009 | Confirmed on a stock US-market 2009 car |
-| Prius, 2010-2015 | Implemented, never yet run against a real one |
-| Prius, 2016 onwards | Detected and reported as unsupported, rather than silently mis-decoded |
-| Prius, 2001-2003 | Detected and reported as unsupported |
-
-You do not need to identify your car. The app probes it and works out how to talk to it.
-
-Your capture will name a **protocol layout**, not a car: "Gen2, battery on 7E3", "Gen2, battery on
-7E2", or "Gen3". That is a statement about which ECU answered, not about which generation you own.
-
-Two cars of the same year can answer on different ECUs, so the app tries one and falls back to the
-other rather than guessing from the year.
-
-**If your car answers in a way BETSY has not seen before**, it says so and turns off live battery
-readings rather than showing you numbers it cannot stand behind. Codes and the raw tables are still
-read, and sharing that scan is exactly what would add proper support for your car. That is the most
-valuable capture of all: it is the only way a new variant ever gets supported.
-
-Other Toyota and Lexus hybrids of the same era may work, since detection is by protocol rather
-than by badge, but none have been tested. A capture from one would settle it.
-
-### What does it read?
-
-- **Live pack data**: state of charge, pack current, per-block voltages, internal resistance,
-  auxiliary battery, temperatures, charge and discharge limits
-- **Trouble codes**: separate hybrid-control, battery-control and engine observations on Gen2
-- **INF sub-codes and freeze pages**: all five pages read from the hybrid-control ECU, with known
-  DTC/sub-code pairs explained in plain language
-
-### Will it change anything on my car?
-
-No. Every command it sends is a read. It never clears a code, never runs an actuator test, and
-never writes to an ECU. If you want to verify that rather than take my word for it, the wire
-commands are listed in [the protocol notes](docs/PROTOCOL.md) and the source is here.
-
-### What do I need?
-
-An Android phone on 8.0 or newer, and an ELM327 adapter. A $3.50 Bluetooth clone is fine; that is
-what the app was developed against. Wi-Fi adapters work too.
-
-### How do I connect?
-
-1. Plug the adapter into the OBD2 socket. On a Gen2 Prius that is under the dash, just left of the
-   steering column.
-2. Pair it in Android's Bluetooth settings first. The PIN is usually `1234` or `0000`.
-3. Press the power button twice with your foot on the brake so the car reads READY.
-4. Open BETSY and pick your adapter from the list.
-
-Android will warn you about installing an APK from outside the store. That is expected for
-anything not distributed through Google Play, and you only have to allow it once.
-
-### Does it tell me the sub-code?
-
-Yes, on the confirmed Gen2 path. BETSY reads the transmitted INF value and explains documented
-DTC/sub-code pairs. If a value is unknown or could belong to more than one reported DTC, the raw
-value remains visible and BETSY does not guess.
-
-<img src="docs/assets/betsy-sub-code.png" width="320" alt="A code screen showing P0571 with sub-code 115, what the controller saw, what to look at, and how urgent it is">
-
-`P0571` with its sub-code, what the controller actually saw, and what to look at first.
-
-### What gets uploaded when I share a scan?
-
-- The raw diagnostic responses from the hybrid-control, battery-control and engine reads
-- App version and build, detected vehicle layout, adapter model
-- A short extract of that session's diagnostic log
-- Anything you type in the notes field
-- Your IP address, briefly, and only to rate-limit abuse
-
-Not sent: VIN, location, or any device or account identifier. The app shows you this before it
-sends anything, and captures are committed publicly to
-[`captures/`](https://github.com/alrighdee/BETSY/tree/main/captures) so you can see exactly what
-arrived.
-
-### Where does the upload go?
-
-To a small Cloudflare Worker that commits the capture into this repository. Its
-[full source](cloudflare-worker/src/index.ts) is here, so you can read exactly what happens to
-your data rather than trust a description of it.
-
-### Can I build it myself?
-
-Yes, see [Developing](docs/DEVELOPING.md). Releases are cut from CI and the APK is attached to
-each tag.
-
-### Can I help without a car?
-
-Yes. The protocol notes, the decoder and the capture pipeline all take review, and
-[Contributing](CONTRIBUTING.md) covers how the project works.
-
----
-
-## Going deeper
-
-| Document | What's in it |
-|---|---|
-| [Glossary](docs/GLOSSARY.md) | What a DTC, INF sub-code, freeze frame and ECU actually are. Start here if the rest reads like alphabet soup |
-| [Developing](docs/DEVELOPING.md) | Building from source, project layout, notes on adapters |
-| [Protocol](docs/PROTOCOL.md) | The wire spec. Read it before touching a decoder, the code cites its section numbers |
-| [Contributing](CONTRIBUTING.md) | Commit conventions, how releases are cut, what is in scope |
-| [Changelog](CHANGELOG.md) | What changed in each release, newest first |
-
-## Not affiliated with Toyota
-
-BETSY is an independent project, not affiliated with, endorsed by, or supported by Toyota Motor
-Corporation. "Toyota", "Prius" and "Lexus" are their trademarks, named here only to say which
-vehicles the app can read.
-
-## Licence
-
-MIT. No warranty. Test on your own vehicle, at your own risk.
+BETSY: licență MIT; LICENSE și NOTICE sunt păstrate. Documentația originală: [README-BETSY.md](README-BETSY.md), [protocol](docs/PROTOCOL.md). Prius Monitor nu este afiliat oficial cu Toyota.

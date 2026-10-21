@@ -22,7 +22,7 @@ object Gen2Decoder {
         val n = m.blockCount
         val i = Normalize.requireTag(r, "61CE")
         val count = minOf(n, 17)
-        Normalize.requireLength(r, i + 4 + count * 4, "21CE")
+        Normalize.requireLength(r, i + 10 + count * 4, "21CE")
         m.soc = Normalize.u8(r, i + 4) / 2f
         m.currentAmps = Normalize.u16(r, i + 6) / 100f - 327.68f
         val blocks = MutableList(n) { 0f }
@@ -51,7 +51,7 @@ object Gen2Decoder {
                 k += 4
             }
         }
-        Normalize.requireLength(r, k + 36, "21CF")
+        Normalize.requireLength(r, k + 32, "21CF")
         val s = if (fifteenBlockVariant) -4 else 0 // p044o1 scalars sit 4 hex chars earlier
         m.aux12V = Normalize.u8(r, k + 6 + s) * 0.2f - 25.6f
         m.maxChargeHp = (Normalize.u8(r, k + 8 + s) / 2f - 64f) * 1.34f

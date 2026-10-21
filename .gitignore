@@ -4,6 +4,7 @@ app/.gradle/
 app/local.properties
 .gradle/
 build/
+delivery/
 
 # Python
 tools/__pycache__/

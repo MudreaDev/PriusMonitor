@@ -1,4 +1,4 @@
-name: check
+name: Prius Monitor build and verify
 
 on:
   push:
@@ -31,6 +31,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: BETSY-debug-apk
+          name: PriusMonitor-debug-apk
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
