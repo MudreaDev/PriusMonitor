@@ -25,6 +25,9 @@ class MonitorDataTest {
     }
 
     @Test fun stoppedEngineAndDirectFuelRateAreDistinctFromMissingData() {
+        assertEquals(FuelSource.ENGINE_STOPPED, Consumption.from(ObdData(rpm = 0f)).source)
+        assertFalse(Consumption.from(ObdData(rpm = 0f)).estimated)
+        assertEquals(FuelSource.UNAVAILABLE, Consumption.from(ObdData()).source)
         assertEquals(0.0, Consumption.from(ObdData(rpm = 0f)).litersHour!!, .00001)
         assertNull(Consumption.from(ObdData()).litersHour)
         val direct = Consumption.from(ObdData(rpm = 1000f, fuelRate = 2f))

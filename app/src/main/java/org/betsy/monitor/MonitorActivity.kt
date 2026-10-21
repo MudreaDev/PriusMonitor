@@ -46,6 +46,7 @@ class MonitorActivity : Activity() {
     private var exportText = ""
     private var documentPickerOpen = false
     private var touching = false
+    private var uiVisible = true
     private var renderPending = false
     private var wasConnected = false
     private var lastAutoSave = 0L
@@ -81,11 +82,13 @@ class MonitorActivity : Activity() {
                 lastAutoSave = engine.sample.time
             }
             wasConnected = engine.connected
-            refresh()
+            if (uiVisible) refresh()
         }
         engine.onReport = {
-            toast("Scanare terminată · raport disponibil")
-            if (page == "Erori") render()
+            if (uiVisible) {
+                toast("Scanare terminată · raport disponibil")
+                if (page == "Erori") render()
+            }
         }
         if (savedInstanceState == null && prefs.getBoolean("first", true)) {
             prefs.edit().putBoolean("first", false).apply()
@@ -341,6 +344,7 @@ class MonitorActivity : Activity() {
             "Conexiune" -> connectPage()
             "Setări" -> settingsPage()
             "Parametri OBD" -> sensorsPage()
+            "Emisii OBD" -> emissionsPage()
             "Istoric călătorii" -> tripHistory()
             "Călătorie" -> tripDetails()
             "Rapoarte" -> reportsPage()
@@ -359,6 +363,7 @@ class MonitorActivity : Activity() {
             "Setări" -> "Preferințele tale, salvate pe telefon."
             "Sănătate baterie" -> "Observații măsurate · SOC și SOH explicate corect."
             "Parametri OBD" -> "Valorile disponibile de la ECU-ul mașinii."
+            "Emisii OBD" -> "Starea MIL și testele raportate de ECU-ul motorului."
             "Istoric călătorii" -> "Datele drumurilor tale, păstrate pe telefon."
             "Călătorie" -> "Rezumat, grafice și exportul eșantioanelor OBD."
             else -> "Rapoarte păstrate local pe telefon."
@@ -445,6 +450,7 @@ class MonitorActivity : Activity() {
         metric(fuel, "Instantaneu", f(c.per100(d.speed)), "l/100 km", accent)
         metric(fuel, "Pe oră", f(c.litersHour, 2), "l/h")
         metric(fuel, "Mediu", f(engine.sample.trip.average), "l/100 km")
+        fuel.addView(label(fuelSourceLabel(c), 11f, amber))
         action(fuel, "Deschide ecranul Consum") { navigate("Consum") }
         if (!engine.connected) {
             val start = card("Pregătit pentru Prius-ul tău")
@@ -478,8 +484,9 @@ class MonitorActivity : Activity() {
         twoMetrics(hero, Triple("Consumul mediu", f(t.average), "l/100 km"), Triple("Viteza", speed(d.speed), speedUnit()))
         gap(hero)
         hero.addView(
-            label(if (c.estimated) "ESTIMAT · calcul din MAF și turație" else "Citire directă a debitului de combustibil ECU", 11f, amber),
+            label(fuelSourceLabel(c), 11f, amber),
         )
+        if (t.seconds > 0 && t.coverage < 99.5) hero.addView(label("Medie parțială · acoperire ${f(t.coverage, 0)} %", 11f, amber))
         val hourly = card("Consum pe oră și la opriri")
         metric(hourly, "Acum · inclusiv în mers", f(c.litersHour, 2), "l/h", accent)
         metric(hourly, "Combustibil la viteză 0", f(t.stoppedLiters, 3), "litri")
@@ -558,6 +565,14 @@ class MonitorActivity : Activity() {
             d.speed != null && d.speed > 110 -> "Viteza este ridicată. O viteză moderată și constantă poate reduce consumul."
             d.rpm == 0f -> "Motorul termic este oprit. Mașina poate utiliza energie electrică; aceasta nu este inclusă în l/100 km."
             else -> "Urmărește media pe o distanță mai lungă. O singură valoare instantanee nu descrie eficiența întregii călătorii."
+        }
+
+    private fun fuelSourceLabel(c: Consumption): String =
+        when (c.source) {
+            FuelSource.ECU -> "Debit combustibil citit direct de la ECU"
+            FuelSource.MAF -> "ESTIMAT · calcul din MAF și turație"
+            FuelSource.ENGINE_STOPPED -> "Motor termic oprit · 0 l/h determinat din turația citită"
+            FuelSource.UNAVAILABLE -> "Consum indisponibil · lipsesc citirile necesare"
         }
 
     private fun battery() {
@@ -669,6 +684,15 @@ class MonitorActivity : Activity() {
 
     private fun diagnostics() {
         val controls = card("Diagnosticare OBD și Toyota")
+        val readiness = obd().readiness
+        metric(
+            controls,
+            "Martor MIL · ECU motor",
+            readiness?.let { if (it.milOn) "Aprins" else "Stins" } ?: "—",
+            tint = if (readiness?.milOn == true) amber else ink,
+        )
+        metric(controls, "Coduri emisii raportate", readiness?.codeCount?.toString() ?: "—")
+        action(controls, "Monitoarele de emisii") { navigate("Emisii OBD") }
         controls.addView(
             label(
                 "Se citesc codurile motorului și, când sunt disponibile, codurile hibride și paginile INF. Citirile care nu răspund rămân în raport.",
@@ -760,7 +784,15 @@ class MonitorActivity : Activity() {
                     val name = device.name ?: "Adaptor Bluetooth"
                     action(adapters, "$name\n${device.address}", name.contains("VIECAR", true) || name.contains("OBD", true)) {
                         if (!engine.connecting) {
-                            engine.connect(device, name)
+                            if (Build.VERSION.SDK_INT >= 33 &&
+                                prefs.getBoolean("background_monitoring", true) &&
+                                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
+                                !prefs.getBoolean("notification_asked", false)
+                            ) {
+                                prefs.edit().putBoolean("notification_asked", true).apply()
+                                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 93)
+                            }
+                            app.connect(device, name)?.let { toast(it) }
                             prefs.edit().putString("adapter", device.address).apply()
                         }
                     }
@@ -778,7 +810,7 @@ class MonitorActivity : Activity() {
             navigate("Acasă")
         }
         note(
-            "1. Introdu adaptorul în portul OBD și pregătește mașina pentru citire.\n2. Asociază VIECAR cu telefonul (PIN-ul este cel indicat de adaptor).\n3. Închide Car Scanner și alte aplicații OBD înainte de conectare.\n\nAceastă versiune folosește Bluetooth Classic SPP. Adaptoarele exclusiv BLE nu sunt compatibile. La trecerea aplicației în fundal, sesiunea se încheie și rezumatul se salvează local.",
+            "1. Introdu adaptorul în portul OBD și pregătește mașina pentru citire.\n2. Asociază VIECAR cu telefonul (PIN-ul este cel indicat de adaptor).\n3. Închide Car Scanner și alte aplicații OBD înainte de conectare.\n\nAceastă versiune folosește Bluetooth Classic SPP. Adaptoarele exclusiv BLE nu sunt compatibile. Monitorizarea în fundal poate continua cu o notificare permanentă. Oprește conexiunea din aplicație sau din notificare.",
         )
     }
 
@@ -817,6 +849,30 @@ class MonitorActivity : Activity() {
                 }.show()
         }
         metric(units, "Limbă", "Română")
+        action(units, "Monitorizare în fundal: ${if (prefs.getBoolean("background_monitoring", true)) "pornită" else "oprită"}") {
+            val enabled = !prefs.getBoolean("background_monitoring", true)
+            prefs.edit().putBoolean("background_monitoring", enabled).apply()
+            if (enabled &&
+                Build.VERSION.SDK_INT >= 33 &&
+                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+            ) {
+                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 93)
+            }
+            render()
+        }
+        units.addView(
+            label(
+                "Monitorizarea în fundal folosește o notificare permanentă cu buton de oprire și poate crește consumul telefonului. " +
+                    "Setarea se aplică la următoarea conexiune. Modul Demo se oprește când părăsești aplicația.",
+                12f,
+                muted,
+            ),
+        )
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            action(units, "Permite notificarea conexiunii") { requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 93) }
+        }
         units.addView(
             label(
                 "Intervalul este pauza dintre cicluri. Citirea efectivă depinde de adaptor și numărul parametrilor disponibili. Consumul rămâne în litri.",
@@ -882,6 +938,44 @@ class MonitorActivity : Activity() {
         note("— înseamnă date indisponibile sau expirate, niciodată valoare zero presupusă.")
     }
 
+    private fun emissionsPage() {
+        val r = obd().readiness
+        val status = card("ECU motor · monitorizare emisii")
+        metric(status, "Martor MIL", r?.let { if (it.milOn) "Aprins" else "Stins" } ?: "—", tint = if (r?.milOn == true) amber else ink)
+        metric(status, "Coduri emisii raportate", r?.codeCount?.toString() ?: "—")
+        if (r == null) {
+            status.addView(label("Date indisponibile. ECU-ul poate să nu răspundă acestui parametru sau citirea a expirat.", 13f, muted))
+            return
+        }
+        metric(status, "Monitoare finalizate / suportate", "${r.completeCount} / ${r.supportedCount}")
+        status.addView(
+            label(
+                if (r.sparkIgnition) {
+                    "Aprindere prin scânteie · profil benzină"
+                } else {
+                    "Aprindere prin compresie · detaliile extinse nu sunt implementate pentru acest profil"
+                },
+                12f,
+                muted,
+            ),
+        )
+        val monitors = card("De la ultima ștergere a codurilor")
+        r.monitors.forEach { m ->
+            val value =
+                when {
+                    !m.supported -> "Nesuportat"
+                    m.complete == true -> "Finalizat"
+                    else -> "Neîncheiat"
+                }
+            metric(monitors, m.title, value, tint = if (m.supported && m.complete != true) amber else muted)
+        }
+        note(
+            "Finalizat înseamnă că ECU-ul a efectuat monitorul, nu că toate sistemele mașinii sunt sănătoase. " +
+                "Neîncheiat nu înseamnă automat defecțiune; unele teste cer anumite condiții de rulare. " +
+                "Aplicația nu șterge coduri și nu resetează monitoarele.",
+        )
+    }
+
     private fun reportsPage() {
         val files = store.list()
         if (files.isEmpty()) note("Nu există rapoarte salvate. Rulează o scanare în Erori, apoi revino aici.")
@@ -943,7 +1037,6 @@ class MonitorActivity : Activity() {
     }
 
     private fun openTrip(id: Long) {
-        toast("Încarc datele călătoriei…")
         app.query({ app.trips.get(id) to app.trips.samples(id) }) { result ->
             if (isDestroyed || isFinishing) return@query
             result
@@ -974,7 +1067,11 @@ class MonitorActivity : Activity() {
         metric(summary, "Timp la viteză 0", duration(t.stoppedSeconds))
         metric(summary, "Eșantioane păstrate", "${r.count}")
         summary.addView(
-            label(if (t.estimated) "Consumul include estimare din MAF." else "Consum din debit ECU, când este disponibil.", 12f, amber),
+            label(
+                if (t.estimated) "Consumul include estimare din MAF." else "Debit ECU și/sau motor termic oprit, conform citirilor.",
+                12f,
+                amber,
+            ),
         )
         action(summary, "Exportă toate eșantioanele CSV", true) {
             export("", "prius-calatorie-${r.id}.csv", "text/csv")
@@ -1056,7 +1153,7 @@ class MonitorActivity : Activity() {
             appendLine("Combustibil: ${f(t.liters, 3)} l; mediu: ${f(t.average, 2)} l/100 km")
             appendLine("La viteză 0: ${f(t.stoppedLiters, 3)} l în ${duration(t.stoppedSeconds)}")
             appendLine("Acoperire consum: ${f(t.coverage, 1)} %; eșantioane: ${r.count}")
-            appendLine(if (t.estimated) "Include estimări MAF." else "Debit ECU, când este disponibil.")
+            appendLine(if (t.estimated) "Include estimări MAF." else "Debit ECU / motor termic oprit.")
             appendLine("Motiv încheiere: ${r.reason}")
         }
 
@@ -1098,7 +1195,7 @@ class MonitorActivity : Activity() {
             appendLine("Durată cu date: ${duration(t.seconds)}")
             appendLine("Acoperire consum: ${f(t.coverage, 1)} %")
             appendLine("La viteză 0: ${f(t.stoppedLiters, 3)} l / ${duration(t.stoppedSeconds)}")
-            appendLine("Sursă consum: ${if (t.estimated) "include estimare din MAF" else "debit ECU, dacă disponibil"}")
+            appendLine("Sursă consum: ${if (t.estimated) "include estimare din MAF" else "debit ECU / motor termic oprit"}")
             appendLine("Lipsa datelor exclude intervalele din calcul. Nu este o măsurare certificată.")
         }
 
@@ -1168,7 +1265,7 @@ class MonitorActivity : Activity() {
         }
         if (engine.sample.time > 0) {
             try {
-                java.io.File(filesDir, "ultima-calatorie.txt").writeText(tripText() + "Motiv încheiere: $reason\n")
+                java.io.File(filesDir, "ultima-calatorie.txt").writeText(tripText() + "Context salvare: $reason\n")
             } catch (
                 _: Exception,
             ) {
@@ -1178,14 +1275,21 @@ class MonitorActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        uiVisible = true
         if (::body.isInitialized) render()
     }
 
     override fun onStop() {
         super.onStop()
+        uiVisible = false
         // The document picker temporarily backgrounds this activity; preserve the trip text
         // before closing Bluetooth, then let the export complete on return.
-        if (!documentPickerOpen && (engine.connected || engine.connecting)) disconnectWithSummary("Aplicația a trecut în fundal")
+        val canContinue = !engine.demo && app.backgroundRequested
+        if (!documentPickerOpen && !canContinue && (engine.connected || engine.connecting)) {
+            disconnectWithSummary("Aplicația a trecut în fundal")
+        } else if (canContinue && engine.sample.time > 0) {
+            saveSummary("Monitorizare activă în fundal")
+        }
     }
 
     override fun onDestroy() {
@@ -1201,6 +1305,7 @@ class MonitorActivity : Activity() {
             "Raport", "Rapoarte" -> navigate("Erori")
             "Călătorie" -> navigate("Istoric călătorii")
             "Istoric călătorii" -> navigate("Consum")
+            "Emisii OBD" -> navigate("Erori")
             "Acasă" -> super.onBackPressed()
             else -> navigate("Acasă")
         }

@@ -6,6 +6,10 @@
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
     <!-- Runtime permissions from API 31; scan is only used to reach paired SPP adapters. -->
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
         android:name=".monitor.MonitorApplication"
@@ -13,6 +17,7 @@
         android:label="Prius Monitor"
         android:allowBackup="false"
         android:theme="@style/BetsyTheme">
+        <service android:name=".monitor.MonitorService" android:exported="false" android:foregroundServiceType="connectedDevice" />
         <activity
             android:name=".monitor.MonitorActivity"
             android:configChanges="orientation|screenSize|keyboardHidden"

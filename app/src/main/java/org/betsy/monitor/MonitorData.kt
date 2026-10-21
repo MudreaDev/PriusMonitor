@@ -21,6 +21,7 @@ data class ObdData(
     val longTrim: Float? = null,
     val timing: Float? = null,
     val pressure: Float? = null,
+    val readiness: ObdReadiness? = null,
 )
 
 object StandardPid {
@@ -67,21 +68,32 @@ object StandardPid {
     }
 }
 
+enum class FuelSource(
+    val id: String,
+) {
+    ECU("ecu"),
+    MAF("maf_estimate"),
+    ENGINE_STOPPED("engine_stopped"),
+    UNAVAILABLE("unavailable"),
+}
+
 data class Consumption(
     val litersHour: Double?,
-    val estimated: Boolean,
+    val source: FuelSource,
 ) {
+    val estimated: Boolean get() = source == FuelSource.MAF
+
     fun per100(speedKmh: Float?): Double? =
         if (litersHour != null && speedKmh != null && speedKmh >= 5f) litersHour * 100 / speedKmh else null
 
     companion object {
         fun from(d: ObdData): Consumption {
-            d.fuelRate?.let { return Consumption(it.toDouble(), false) }
+            d.fuelRate?.let { return Consumption(it.toDouble(), FuelSource.ECU) }
             // A stationary crankshaft on a hybrid consumes no petrol. All other MAF readings
             // are estimates: closed-loop stoichiometry and petrol density vary in real use.
-            if (d.rpm == 0f) return Consumption(0.0, true)
-            if (d.rpm == null || d.maf == null) return Consumption(null, true)
-            return Consumption(d.maf * 3600.0 / (14.7 * 745.0), true)
+            if (d.rpm == 0f) return Consumption(0.0, FuelSource.ENGINE_STOPPED)
+            if (d.rpm == null || d.maf == null) return Consumption(null, FuelSource.UNAVAILABLE)
+            return Consumption(d.maf * 3600.0 / (14.7 * 745.0), FuelSource.MAF)
         }
     }
 }

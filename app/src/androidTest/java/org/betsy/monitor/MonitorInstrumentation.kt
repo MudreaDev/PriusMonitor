@@ -149,6 +149,9 @@ class MonitorInstrumentation : Instrumentation() {
             }
             step("Diagnostic scan saves and reloads a Demo report") {
                 click("Erori")
+                click("Monitoarele de emisii")
+                check(texts().contains("ECU motor · monitorizare emisii"))
+                click("Erori")
                 click("Citește codurile de eroare")
                 waitUntil { texts().contains("P0A80") }
                 val reportTime = (targetContext.applicationContext as MonitorApplication).engine.report!!.time
@@ -188,6 +191,19 @@ class MonitorInstrumentation : Instrumentation() {
                 waitUntil { texts().contains("CĂLĂTORIE DEMO") }
                 check(texts().contains("Exportă toate eșantioanele CSV"))
                 screenshot("calatorie")
+            }
+            step("Connected-device foreground service starts and releases itself when idle") {
+                if (Build.VERSION.SDK_INT >= 31) {
+                    android.os.ParcelFileDescriptor
+                        .AutoCloseInputStream(
+                            uiAutomation.executeShellCommand("pm grant ${targetContext.packageName} android.permission.BLUETOOTH_CONNECT"),
+                        ).use { it.readBytes() }
+                }
+                val app = targetContext.applicationContext as MonitorApplication
+                val before = app.lastServiceStart
+                targetContext.startForegroundService(Intent(targetContext, MonitorService::class.java))
+                waitUntil { app.lastServiceStart > before }
+                waitUntil { !app.backgroundRunning && !app.backgroundRequested }
             }
             finish(0, Bundle().apply { putString("stream", "\nALL ${steps.size} DEVICE CHECKS PASSED\n") })
         } catch (e: Throwable) {
@@ -235,7 +251,7 @@ class MonitorInstrumentation : Instrumentation() {
 
     private fun screenshot(name: String) {
         // View hierarchy idle can precede the compositor's next frame.
-        Thread.sleep(300)
+        Thread.sleep(2300)
         val bitmap = uiAutomation.takeScreenshot() ?: return
         val file = File(targetContext.getExternalFilesDir(null), "$name.png")
         file.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }

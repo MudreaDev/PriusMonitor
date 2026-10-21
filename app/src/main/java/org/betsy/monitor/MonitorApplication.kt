@@ -1,6 +1,8 @@
 package org.betsy.monitor
 
 import android.app.Application
+import android.bluetooth.BluetoothDevice
+import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import java.util.concurrent.Executors
@@ -20,6 +22,12 @@ class MonitorApplication : Application() {
     // Accessed only on io, with all record/start/finish operations in queue order.
     private var activeId: Long? = null
 
+    @Volatile var backgroundRequested = false
+
+    @Volatile var backgroundRunning = false
+
+    @Volatile var lastServiceStart = 0L
+
     @Volatile var storageError = ""
         private set
 
@@ -28,6 +36,25 @@ class MonitorApplication : Application() {
         trips = TripStore(this)
         write { trips.recoverInterrupted() }
         engine.addObserver { journalChanged() }
+    }
+
+    fun connect(
+        device: BluetoothDevice,
+        name: String,
+    ): String? {
+        val background = getSharedPreferences("prius-monitor", MODE_PRIVATE).getBoolean("background_monitoring", true)
+        backgroundRequested = background
+        var warning: String? = null
+        if (background) {
+            try {
+                startForegroundService(Intent(this, MonitorService::class.java))
+            } catch (_: Exception) {
+                backgroundRequested = false
+                warning = "Monitorizarea în fundal nu a putut porni. Păstrează aplicația deschisă."
+            }
+        }
+        engine.connect(device, name)
+        return warning
     }
 
     private fun write(block: () -> Unit) {

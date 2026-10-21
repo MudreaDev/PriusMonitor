@@ -4,13 +4,8 @@ import android.bluetooth.BluetoothDevice
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import org.betsy.decode.DtcDecoder
 import org.betsy.detect.VehicleInfo
-import org.betsy.dtc.DtcReader
-import org.betsy.elm.ElmException
 import org.betsy.elm.ElmSession
-import org.betsy.elm.NegativeResponseException
-import org.betsy.elm.NoDataException
 import org.betsy.model.BatteryModel
 import org.betsy.transport.awaitBlocking
 import java.util.concurrent.Executors
@@ -38,7 +33,8 @@ class MonitorEngine {
 
     private var tick = 0
     private val meter = TripMeter()
-    var intervalMs = 1000L
+
+    @Volatile var intervalMs = 1000L
     var onChanged: (() -> Unit)? = null
     var onReport: ((ScanReport) -> Unit)? = null
     var sample = LiveSample()
@@ -230,66 +226,26 @@ class MonitorEngine {
         notifyUi(id)
         worker.execute {
             try {
-                val notes = mutableListOf<String>()
-                val raw = linkedMapOf<String, String>()
-                val faults = mutableListOf<Fault>()
-                val inf = mutableListOf<String>()
-                if (demo) {
-                    Thread.sleep(800)
-                    faults += Fault("P0A80", "ECU hibrid · 7E2", "Exemplu demonstrativ")
-                    notes += "Raport DEMO. Nu provine de la o mașină și nu reprezintă un diagnostic."
-                } else {
-                    val elm = session ?: error("Sesiune închisă")
-                    awaitBlocking {
-                        elm.withEcu("7E0") {
-                            for ((cmd, label) in listOf("03" to "Memorat", "07" to "În așteptare", "0A" to "Permanent")) {
-                                scanProgress = "ECU motor · $label"
+                val result =
+                    if (demo) {
+                        Thread.sleep(800)
+                        ScanReport(
+                            System.currentTimeMillis(),
+                            true,
+                            listOf(Fault("P0A80", "ECU hibrid · 7E2", "Exemplu demonstrativ")),
+                            listOf("Raport DEMO. Nu provine de la o mașină și nu reprezintă un diagnostic."),
+                            emptyMap(),
+                            layout,
+                        )
+                    } else {
+                        val elm = session ?: error("Sesiune închisă")
+                        awaitBlocking {
+                            ReadOnlyDiagnostics.read(elm, info, layout, progress = { text ->
+                                scanProgress = text
                                 notifyUi(id)
-                                try {
-                                    val response = elm.command(cmd)
-                                    raw["7E0/$cmd"] = response
-                                    val codes =
-                                        when (cmd) {
-                                            "03" -> DtcDecoder.decodeMode03(response)
-                                            "07" -> DtcDecoder.decodeMode07(response)
-                                            else -> DtcDecoder.decodeMode0A(response)
-                                        }
-                                    faults += codes.filter { it.raw != 0 }.map { Fault(it.code, "ECU motor · 7E0", label) }
-                                } catch (
-                                    e: NoDataException,
-                                ) {
-                                    notes += "ECU motor · $label : citire indisponibilă (${e.message})"
-                                } catch (
-                                    e: NegativeResponseException,
-                                ) {
-                                    notes += "ECU motor · $label : cerere refuzată (${e.message})"
-                                } catch (e: ElmException) {
-                                    notes += "ECU motor · $label : adaptorul a refuzat cererea (${e.message})"
-                                }
-                            }
-                        }
-                        val vehicle = info
-                        if (vehicle != null) {
-                            val result =
-                                DtcReader(elm, vehicle).read { step ->
-                                    scanProgress = "Toyota · ${step.totalStep}/${step.totalSteps} · ${step.label}"
-                                    notifyUi(id)
-                                }
-                            faults +=
-                                result.groups.flatMap { g -> g.codes.filter { it.raw != 0 }.map { Fault(it.code, g.label, "Toyota ECU") } }
-                            raw.putAll(result.rawResponses)
-                            notes += result.notes
-                            inf +=
-                                result.infCodes.map {
-                                    "INF ${it.code} · pagina %02X".format(it.table) +
-                                        " · asocierea cu un DTC necesită verificare"
-                                }
-                        } else {
-                            notes += "ECU hibrid indisponibil. Raportul acoperă numai citirile ECU motor."
+                            })
                         }
                     }
-                }
-                val result = ScanReport(System.currentTimeMillis(), demo, faults.distinct(), notes, raw, layout, inf)
                 main.post {
                     if (id == generation) {
                         report = result

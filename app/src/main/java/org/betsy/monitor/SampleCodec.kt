@@ -58,6 +58,7 @@ object SampleCodec {
                 .number("longTrim", d.longTrim)
                 .number("timing", d.timing)
                 .number("pressure", d.pressure)
+                .put("readiness", d.readiness?.json() ?: JSONObject.NULL)
         val battery =
             s.battery?.let { b ->
                 JSONObject()
@@ -105,6 +106,7 @@ object SampleCodec {
                 longTrim = d.floatOrNull("longTrim"),
                 timing = d.floatOrNull("timing"),
                 pressure = d.floatOrNull("pressure"),
+                readiness = d.optJSONObject("readiness")?.let { ObdReadiness.decode(it.getString("raw")) },
             )
         val battery =
             j.optJSONObject("battery")?.let { b ->
@@ -159,11 +161,16 @@ object SampleCodec {
                 "intake_pressure_kpa",
                 "fuel_rate_used_l_h",
                 "fuel_estimated",
+                "fuel_source",
                 "instant_l_100km",
                 "hv_soc_pct",
                 "hv_current_a",
                 "hv_aux_v",
                 "hv_pack_v",
+                "mil_on",
+                "emission_dtc_count",
+                "readiness_supported",
+                "readiness_complete",
             ) +
                 (1..3).map { "hv_temp${it}_c" } + (1..14).map { "block${it}_v" } + (1..14).map { "block${it}_mohm" }
         ).joinToString(";")
@@ -195,11 +202,16 @@ object SampleCodec {
                 n(d.pressure),
                 n(fuel.litersHour),
                 if (fuel.litersHour == null) "" else fuel.estimated.toString(),
+                fuel.source.id,
                 n(fuel.per100(d.speed)),
                 n(b?.soc),
                 n(b?.currentAmps),
                 n(b?.aux12V),
                 n(b?.takeIf { it.blockVolts.isNotEmpty() }?.packVolts()),
+                d.readiness?.milOn?.toString() ?: "",
+                d.readiness?.codeCount?.toString() ?: "",
+                d.readiness?.supportedCount?.toString() ?: "",
+                d.readiness?.completeCount?.toString() ?: "",
             ) + (0..2).map { n(b?.temps?.getOrNull(it)) } + (0..13).map { n(b?.blockVolts?.getOrNull(it)) } +
                 (0..13).map { n(b?.internalResistance?.getOrNull(it)) }
         return row.joinToString(";")

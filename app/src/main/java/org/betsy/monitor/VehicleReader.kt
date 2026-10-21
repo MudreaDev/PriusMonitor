@@ -20,7 +20,9 @@ class VehicleReader(
     private var knownPids: Set<String>? = null
     private val values = mutableMapOf<String, Pair<Float, Long>>()
     private val unavailableUntil = mutableMapOf<String, Long>()
+    private val hvUnavailableUntil = mutableMapOf<String, Long>()
     private var tick = 0
+    private var readiness: Pair<ObdReadiness, Long>? = null
 
     suspend fun initialize() {
         // The first physical OBD request can start automatic protocol detection on ELM clones.
@@ -52,7 +54,9 @@ class VehicleReader(
                             Gen2Decoder.decodeCe(raw, m)
                         }
                     }
-                    m.blockVolts.size == 14 && m.blockVolts.all { it.isFinite() && it in 5f..25f }
+                    // A zero/weak block may be the very fault being diagnosed. Use the ECU's
+                    // positive response and complete layout, not a "healthy voltage" gate.
+                    m.blockVolts.size == 14 && m.blockVolts.all { it.isFinite() }
                 }
             if (detected == true) {
                 info = VehicleInfo(model, true, 14, 28)
@@ -73,8 +77,17 @@ class VehicleReader(
         }
     }
 
+    private suspend fun readReadiness() {
+        val now = clockMs()
+        if (knownPids?.contains("01") == false || (unavailableUntil["01"] ?: 0) > now) return
+        val decoded = optional { ObdReadiness.decode(elm.command("0101")) }
+        readiness = decoded?.let { it to now }
+        if (decoded == null) unavailableUntil["01"] = now + 15000
+    }
+
     suspend fun read(): Triple<ObdData, BatteryModel?, List<String>> {
         elm.withEcu("7E0") {
+            if (tick % 5 == 0) readReadiness()
             for (pid in listOf("0D", "0C", "05", "10", "5E", "42")) readPid(pid)
             val slow = listOf("0F", "46", "04", "11", "2F", "1F", "06", "07", "0E", "0B")
             if (tick == 0) {
@@ -103,6 +116,7 @@ class VehicleReader(
                 get("07"),
                 get("0E"),
                 get("0B"),
+                readiness = readiness?.takeIf { clockMs() - it.second < 15000 }?.first,
             )
         val errors = mutableListOf<String>()
         val battery =
@@ -113,6 +127,11 @@ class VehicleReader(
                         cmd: String,
                         decode: (String, BatteryModel) -> Unit,
                     ) {
+                        val now = clockMs()
+                        if ((hvUnavailableUntil[cmd] ?: 0) > now) {
+                            errors += "$cmd : temporar indisponibil · reîncercare automată"
+                            return
+                        }
                         // Commit only a complete field group, so a truncated response cannot leave
                         // partially decoded defaults masquerading as fresh measurements.
                         val candidate = m.copy()
@@ -122,6 +141,7 @@ class VehicleReader(
                                 true
                             } == true
                         if (success) {
+                            hvUnavailableUntil.remove(cmd)
                             m.soc = candidate.soc
                             m.currentAmps = candidate.currentAmps
                             m.aux12V = candidate.aux12V
@@ -132,6 +152,7 @@ class VehicleReader(
                             m.temps = candidate.temps
                             m.internalResistance = candidate.internalResistance
                         } else {
+                            hvUnavailableUntil[cmd] = now + 15000
                             errors += "$cmd : parametru indisponibil / răspuns incomplet"
                         }
                     }

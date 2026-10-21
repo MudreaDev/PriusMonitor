@@ -31,9 +31,9 @@ l/100 km = l/h × 100 / km/h, afișat de la 5 km/h. Media integrează debitul ș
 
 **Viteză 0 nu înseamnă Parking.** Litrii și timpul la viteză 0 sunt separați, iar călătoria continuă.
 
-La deconectare sau trecerea în fundal, conexiunea se închide și ultimul rezumat al călătoriei este păstrat local, exportabil din Setări. Exportul prin selectorul de documente păstrează sesiunea activă. O conexiune nouă începe o călătorie nouă.
+Cu monitorizarea în fundal activată (implicit), o conexiune reală poate continua când folosești altă aplicație sau stingi ecranul. Serviciul afișează o notificare cu buton de oprire și menține procesorul activ pe durata conexiunii, în limita unei solicitări de 12 ore. Acest mod poate crește consumul telefonului. Schimbarea setării se aplică la următoarea conexiune. Demo se oprește când părăsești aplicația. La deconectare, ultimul rezumat rămâne exportabil din Setări. O conexiune nouă începe o călătorie nouă.
 
-Rapoartele de diagnostic rămân în spațiul privat al aplicației după repornire; dezinstalarea le șterge. Nu se trimit automat date sau scanări pe internet.
+Istoricul salvează automat eșantioanele OBD și rezumatul fiecărei călătorii într-un jurnal SQLite privat. Sunt disponibile grafice și export CSV cu unități explicite, marcaj Demo și câmpuri goale pentru citirile indisponibile. O sesiune întreruptă de oprirea procesului este identificată la următoarea pornire. Rapoartele de diagnostic rămân în spațiul privat al aplicației după repornire; dezinstalarea le șterge. Nu se trimit automat date sau scanări pe internet.
 
 ## Limite
 

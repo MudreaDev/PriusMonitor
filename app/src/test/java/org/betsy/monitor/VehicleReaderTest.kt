@@ -22,6 +22,7 @@ class VehicleReaderTest {
             "0120" to "4120FFFFFFFF",
             "0140" to "4140FFFFFFFF",
             "7E0/010D" to "410D32",
+            "7E0/0101" to "41018307A521",
             "7E0/010C" to "410C1770",
             "7E0/0105" to "41057A",
             "7E0/0110" to "411003E8",
@@ -50,6 +51,8 @@ class VehicleReaderTest {
         assertEquals(50f, result.first.speed!!, .001f)
         assertEquals(1500f, result.first.rpm!!, .001f)
         assertEquals(82f, result.first.coolant!!, .001f)
+        assertTrue(result.first.readiness!!.milOn)
+        assertEquals(3, result.first.readiness!!.codeCount)
         assertNull(result.first.fuelRate)
         assertTrue(Consumption.from(result.first).estimated)
         assertEquals(14, result.second!!.blockVolts.size)
@@ -109,5 +112,41 @@ class VehicleReaderTest {
             }
         val reader = VehicleReader(ElmSession(dead)) { 1000 }
         assertThrows(TransportException::class.java) { awaitBlocking { reader.initialize() } }
+    }
+
+    @Test fun aZeroVoltageReportedByTheEcuIsNotHiddenByAHealthyVoltageFilter() {
+        val script = script()
+        script["7E2/2181"] = "6181" + "0000" + "2E1B".repeat(13) + "AF24"
+        val reader = VehicleReader(ElmSession(ReplayTransport(script))) { 1000 }
+        val result =
+            awaitBlocking {
+                reader.initialize()
+                reader.read()
+            }
+        assertEquals(VehicleModel.GEN3, reader.info?.model)
+        assertEquals(0f, result.second!!.blockVolts.first(), .0001f)
+        assertEquals(14, result.second!!.blockVolts.size)
+    }
+
+    @Test fun unavailableHvFieldsDoNotWasteEveryPollCycleAndCanRecover() {
+        val script = script()
+        script["7E2/2198"] = "NO DATA"
+        val replay = ReplayTransport(script)
+        var now = 1000L
+        val reader = VehicleReader(ElmSession(replay)) { now }
+        awaitBlocking {
+            reader.initialize()
+            reader.read()
+        }
+        assertEquals(1, replay.sent.count { it == "2198" })
+        now = 2000
+        val unavailable = awaitBlocking { reader.read() }
+        assertEquals(1, replay.sent.count { it == "2198" })
+        assertTrue(unavailable.second!!.currentAmps.isNaN())
+        script["7E2/2198"] = "6198800099AA64"
+        now = 17000
+        val recovered = awaitBlocking { reader.read() }
+        assertEquals(2, replay.sent.count { it == "2198" })
+        assertEquals(0f, recovered.second!!.currentAmps, .0001f)
     }
 }
