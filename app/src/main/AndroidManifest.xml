@@ -8,6 +8,7 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
     <application
+        android:name=".monitor.MonitorApplication"
         android:icon="@mipmap/ic_launcher"
         android:label="Prius Monitor"
         android:allowBackup="false"

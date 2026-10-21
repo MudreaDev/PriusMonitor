@@ -31,7 +31,8 @@ import java.util.Locale
 
 /** Native Android UI: all displayed live values come from MonitorEngine, never preview defaults. */
 class MonitorActivity : Activity() {
-    private val engine = MonitorEngine()
+    private val app by lazy { application as MonitorApplication }
+    private val engine by lazy { app.engine }
     private val handler = Handler(Looper.getMainLooper())
     private val prefs by lazy { getSharedPreferences("prius-monitor", MODE_PRIVATE) }
     private val store by lazy { ReportStore(this) }
@@ -48,6 +49,12 @@ class MonitorActivity : Activity() {
     private var renderPending = false
     private var wasConnected = false
     private var lastAutoSave = 0L
+    private var tripRows = emptyList<RecordedTrip>()
+    private var historyLoading = false
+    private var historyLoadedAt = 0L
+    private var selectedTrip: RecordedTrip? = null
+    private var selectedSamples = emptyList<LiveSample>()
+    private var pendingTripCsv: Long? = null
     private var imperial = false
     private var fahrenheit = false
     private val bg = Color.rgb(8, 15, 25)
@@ -76,13 +83,8 @@ class MonitorActivity : Activity() {
             wasConnected = engine.connected
             refresh()
         }
-        engine.onReport = { report ->
-            try {
-                store.save(report)
-                toast("Raport salvat pe telefon")
-            } catch (_: Exception) {
-                toast("Raportul nu a putut fi salvat")
-            }
+        engine.onReport = {
+            toast("Scanare terminată · raport disponibil")
             if (page == "Erori") render()
         }
         if (savedInstanceState == null && prefs.getBoolean("first", true)) {
@@ -198,7 +200,13 @@ class MonitorActivity : Activity() {
                 setPadding(0, dp(9), 0, dp(9))
             }
         row.addView(label(title, 13f, muted), LinearLayout.LayoutParams(0, -2, 1f))
-        row.addView(label(value + if (unit.isBlank()) "" else " $unit", 17f, tint, true))
+        row.addView(
+            label(value + if (unit.isBlank()) "" else " $unit", 17f, tint, true).apply {
+                setPadding(dp(12), 0, 0, 0)
+                maxWidth = dp(190)
+                gravity = Gravity.END
+            },
+        )
         parent.addView(row)
     }
 
@@ -320,6 +328,7 @@ class MonitorActivity : Activity() {
         gap(body, 4)
         body.addView(label(subtitle(), 12f, muted))
         gap(body, 18)
+        if (app.storageError.isNotBlank()) note(app.storageError, amber)
         if (engine.demo && page != "Conexiune" && page != "Setări") {
             card().addView(label("MOD DEMO · Toate valorile sunt simulate.", 12f, amber, true))
         }
@@ -332,6 +341,8 @@ class MonitorActivity : Activity() {
             "Conexiune" -> connectPage()
             "Setări" -> settingsPage()
             "Parametri OBD" -> sensorsPage()
+            "Istoric călătorii" -> tripHistory()
+            "Călătorie" -> tripDetails()
             "Rapoarte" -> reportsPage()
             "Raport" -> loadedReport?.let { showReport(it) }
         }
@@ -346,6 +357,10 @@ class MonitorActivity : Activity() {
             "Erori" -> "Citire ECU motor și hibrid · fără ștergerea codurilor."
             "Conexiune" -> "VIECAR / ELM327 · Bluetooth Classic SPP."
             "Setări" -> "Preferințele tale, salvate pe telefon."
+            "Sănătate baterie" -> "Observații măsurate · SOC și SOH explicate corect."
+            "Parametri OBD" -> "Valorile disponibile de la ECU-ul mașinii."
+            "Istoric călătorii" -> "Datele drumurilor tale, păstrate pe telefon."
+            "Călătorie" -> "Rezumat, grafice și exportul eșantioanelor OBD."
             else -> "Rapoarte păstrate local pe telefon."
         }
 
@@ -485,6 +500,7 @@ class MonitorActivity : Activity() {
             ),
         )
         action(trip, "Exportă rezumatul călătoriei") { exportTrip() }
+        action(trip, "Istoricul călătoriilor") { navigate("Istoric călătorii") }
         action(trip, "Încheie și începe o călătorie nouă") {
             AlertDialog
                 .Builder(
@@ -817,6 +833,7 @@ class MonitorActivity : Activity() {
             ),
         )
         action(data, "Rapoarte de diagnostic") { navigate("Rapoarte") }
+        action(data, "Istoricul călătoriilor") { navigate("Istoric călătorii") }
         val lastTrip = java.io.File(filesDir, "ultima-calatorie.txt")
         if (lastTrip.exists()) {
             action(data, "Exportă ultima călătorie încheiată") {
@@ -836,6 +853,16 @@ class MonitorActivity : Activity() {
                 .setMessage(
                     "Pentru Toyota Prius 30, cu adaptor ELM327 Bluetooth Classic.\n\nBazat pe BETSY de alrighdee și colaboratori, licență MIT. Codul și protocolul original sunt păstrate în proiect.\n\nGen 3: implementare testată software, necesită verificare pe mașină.\n\nAplicația nu codifică ECU-uri, nu șterge erori și nu certifică sănătatea bateriei.",
                 ).setPositiveButton("Închide", null)
+                .show()
+        }
+        action(data, "Licențe open-source") {
+            val license = assets.open("licenses/BETSY-MIT.txt").bufferedReader().use { it.readText() }
+            val notice = assets.open("licenses/NOTICE.txt").bufferedReader().use { it.readText() }
+            AlertDialog
+                .Builder(this)
+                .setTitle("BETSY · MIT")
+                .setMessage(license + "\n\n" + notice)
+                .setPositiveButton("Închide", null)
                 .show()
         }
     }
@@ -874,6 +901,164 @@ class MonitorActivity : Activity() {
             }
         }
     }
+
+    private fun reloadTrips() {
+        if (historyLoading) return
+        historyLoading = true
+        app.query({ app.trips.list() }) { result ->
+            if (isDestroyed || isFinishing) return@query
+            historyLoading = false
+            historyLoadedAt = System.currentTimeMillis()
+            result.onSuccess { tripRows = it }.onFailure { toast("Istoricul nu a putut fi citit") }
+            if (page == "Istoric călătorii") refresh()
+        }
+    }
+
+    private fun tripHistory() {
+        if (!historyLoading && System.currentTimeMillis() - historyLoadedAt > 5000) reloadTrips()
+        val controls = card("Jurnalul călătoriilor")
+        controls.addView(
+            label(
+                "Valorile sunt înregistrate automat cât timp există o sesiune activă. " +
+                    "Datele Demo sunt etichetate și rămân separate de citirile mașinii.",
+                13f,
+                muted,
+            ),
+        )
+        action(controls, if (historyLoading) "Se încarcă…" else "Actualizează istoricul") { reloadTrips() }
+        if (tripRows.isEmpty() && !historyLoading) note("Nu există încă drumuri înregistrate. Conectează adaptorul sau explorează Demo.")
+        tripRows.forEach { r ->
+            val c = card((if (r.demo) "DEMO · " else "") + time(r.started))
+            c.addView(label(if (r.ended == null) "Sesiune activă" else r.reason, 11f, if (r.ended == null) accent else muted))
+            metric(
+                c,
+                "Distanță",
+                f(if (imperial) r.snapshot.distanceKm / 1.609344 else r.snapshot.distanceKm, 2),
+                if (imperial) "mile" else "km",
+            )
+            metric(c, "Consum mediu", f(r.snapshot.average), "l/100 km")
+            metric(c, "Eșantioane", "${r.count}")
+            action(c, "Deschide călătoria") { openTrip(r.id) }
+        }
+    }
+
+    private fun openTrip(id: Long) {
+        toast("Încarc datele călătoriei…")
+        app.query({ app.trips.get(id) to app.trips.samples(id) }) { result ->
+            if (isDestroyed || isFinishing) return@query
+            result
+                .onSuccess { (trip, samples) ->
+                    if (trip == null) {
+                        toast("Călătoria nu mai există")
+                        return@onSuccess
+                    }
+                    selectedTrip = trip
+                    selectedSamples = samples
+                    navigate("Călătorie")
+                }.onFailure { toast("Datele călătoriei nu au putut fi citite") }
+        }
+    }
+
+    private fun tripDetails() {
+        val r = selectedTrip ?: return
+        val t = r.snapshot
+        val summary = card(if (r.demo) "CĂLĂTORIE DEMO" else "Călătorie OBD")
+        summary.addView(label("${time(r.started)}\n${r.adapter}\n${r.layout}", 12f, muted))
+        metric(summary, "Încheiată", r.ended?.let { time(it) } ?: "În curs")
+        metric(summary, "Distanță măsurată", f(if (imperial) t.distanceKm / 1.609344 else t.distanceKm, 2), if (imperial) "mile" else "km")
+        metric(summary, "Consum mediu", f(t.average), "l/100 km", accent)
+        metric(summary, "Combustibil calculat", f(t.liters, 3), "litri")
+        metric(summary, "Timp cu date", duration(t.seconds))
+        metric(summary, "Acoperire consum", f(t.coverage, 0), "%")
+        metric(summary, "La viteză 0", f(t.stoppedLiters, 3), "litri")
+        metric(summary, "Timp la viteză 0", duration(t.stoppedSeconds))
+        metric(summary, "Eșantioane păstrate", "${r.count}")
+        summary.addView(
+            label(if (t.estimated) "Consumul include estimare din MAF." else "Consum din debit ECU, când este disponibil.", 12f, amber),
+        )
+        action(summary, "Exportă toate eșantioanele CSV", true) {
+            export("", "prius-calatorie-${r.id}.csv", "text/csv")
+            pendingTripCsv = r.id
+        }
+        action(summary, "Exportă rezumatul în text") { export(recordedTripText(r), "prius-calatorie-${r.id}.txt", "text/plain") }
+        action(summary, "Actualizează datele călătoriei") { openTrip(r.id) }
+        val speedChart = card("Viteza înregistrată")
+        speedChart.addView(
+            LineChart(
+                this,
+                selectedSamples.map { it.obd.speed?.let { v -> if (imperial) v / 1.609344f else v } },
+                accent,
+                "Ultimele ${selectedSamples.size} eșantioane · ${speedUnit()}",
+            ),
+            LinearLayout.LayoutParams(-1, dp(170)),
+        )
+        val fuelChart = card("Consumul înregistrat")
+        fuelChart.addView(
+            LineChart(
+                this,
+                selectedSamples.map { Consumption.from(it.obd).per100(it.obd.speed)?.toFloat() },
+                amber,
+                "l/100 km · goluri = lipsă date / viteză sub 5 km/h",
+            ),
+            LinearLayout.LayoutParams(-1, dp(170)),
+        )
+        val socChart = card("Nivelul bateriei HV")
+        socChart.addView(
+            LineChart(
+                this,
+                selectedSamples.map { it.battery?.soc?.takeIf { v -> v.isFinite() } },
+                accent,
+                "% SOC · nivel de încărcare, nu SOH",
+            ),
+            LinearLayout.LayoutParams(-1, dp(170)),
+        )
+        val end = card("Despre această înregistrare")
+        end.addView(
+            label(
+                "${r.reason.ifBlank { "Călătorie în curs" }}\nGraficele folosesc cel mult ultimele 1.800 de eșantioane. " +
+                    "Exportul CSV conține toate eșantioanele păstrate, cu unități explicite, marcaj Demo și celule goale pentru parametrii indisponibili.",
+                12f,
+                muted,
+            ),
+        )
+        if (r.ended != null) {
+            action(end, "Șterge această călătorie") {
+                AlertDialog
+                    .Builder(this)
+                    .setTitle("Ștergi călătoria?")
+                    .setMessage(
+                        "Se vor șterge rezumatul și toate eșantioanele acestei călătorii din telefon. Fișierele exportate rămân la destinația aleasă.",
+                    ).setNegativeButton("Renunță", null)
+                    .setPositiveButton("Șterge") { _, _ ->
+                        app.query({ app.trips.delete(r.id) }) { result ->
+                            if (isDestroyed) return@query
+                            result
+                                .onSuccess {
+                                    historyLoadedAt = 0
+                                    selectedTrip = null
+                                    navigate("Istoric călătorii")
+                                }.onFailure { toast("Ștergerea a eșuat") }
+                        }
+                    }.show()
+            }
+        }
+    }
+
+    private fun recordedTripText(r: RecordedTrip): String =
+        buildString {
+            val t = r.snapshot
+            appendLine("PRIUS MONITOR — CĂLĂTORIE ${r.id}")
+            appendLine(if (r.demo) "DEMO · DATE SIMULATE" else "Citiri OBD / calcule")
+            appendLine("Pornire: ${time(r.started)}")
+            appendLine("Sfârșit: ${r.ended?.let { time(it) } ?: "în curs"}")
+            appendLine(r.layout)
+            appendLine("Distanță: ${f(t.distanceKm, 3)} km")
+            appendLine("Combustibil: ${f(t.liters, 3)} l; mediu: ${f(t.average, 2)} l/100 km")
+            appendLine("La viteză 0: ${f(t.stoppedLiters, 3)} l în ${duration(t.stoppedSeconds)}")
+            appendLine("Acoperire consum: ${f(t.coverage, 1)} %; eșantioane: ${r.count}")
+            appendLine(if (t.estimated) "Include estimări MAF." else "Debit ECU, când este disponibil.")
+            appendLine("Motiv încheiere: ${r.reason}")
+        }
 
     private fun hasBluetoothPermission() =
         Build.VERSION.SDK_INT < 31 || checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
@@ -927,6 +1112,7 @@ class MonitorActivity : Activity() {
         mime: String,
     ) {
         exportText = text
+        pendingTripCsv = null
         documentPickerOpen = true
         startActivityForResult(
             Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
@@ -945,15 +1131,21 @@ class MonitorActivity : Activity() {
     ) {
         super.onActivityResult(request, result, intent)
         if (request == 92) documentPickerOpen = false
+        val csvTrip = if (request == 92) pendingTripCsv else null
+        if (request == 92) pendingTripCsv = null
         if (request == 92 && result == RESULT_OK) {
             intent?.data?.let { uri ->
-                try {
-                    contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(exportText) }
-                    toast("Fișier exportat")
-                } catch (
-                    _: Exception,
-                ) {
-                    toast("Exportul a eșuat. Alege o altă destinație.")
+                val text = exportText
+                app.query({
+                    val stream = contentResolver.openOutputStream(uri) ?: error("Destinație indisponibilă")
+                    stream.bufferedWriter().use { writer ->
+                        if (csvTrip != null) app.trips.exportCsv(csvTrip, writer) else writer.write(text)
+                    }
+                }) { outcome ->
+                    if (isDestroyed) return@query
+                    outcome
+                        .onSuccess { toast("Fișier exportat") }
+                        .onFailure { toast("Exportul a eșuat. Alege o altă destinație.") }
                 }
             }
         }
@@ -997,7 +1189,8 @@ class MonitorActivity : Activity() {
     }
 
     override fun onDestroy() {
-        engine.destroy()
+        engine.onChanged = null
+        engine.onReport = null
         super.onDestroy()
     }
 
@@ -1006,6 +1199,8 @@ class MonitorActivity : Activity() {
         when (page) {
             "Sănătate baterie" -> navigate("Baterie")
             "Raport", "Rapoarte" -> navigate("Erori")
+            "Călătorie" -> navigate("Istoric călătorii")
+            "Istoric călătorii" -> navigate("Consum")
             "Acasă" -> super.onBackPressed()
             else -> navigate("Acasă")
         }

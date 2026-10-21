@@ -24,6 +24,11 @@ class MonitorEngine {
     private val main = Handler(Looper.getMainLooper())
 
     @Volatile private var generation = 0
+    private var journey = 0
+    val journeyKey: Int get() = journey
+    var lastEndReason = "Sesiune nouă"
+        private set
+    private val observers = linkedSetOf<() -> Unit>()
 
     @Volatile private var transport: DeadlineBluetoothTransport? = null
     private var session: ElmSession? = null
@@ -59,8 +64,25 @@ class MonitorEngine {
     var scanProgress = ""
         private set
 
+    fun addObserver(observer: () -> Unit) {
+        observers += observer
+    }
+
+    fun removeObserver(observer: () -> Unit) {
+        observers -= observer
+    }
+
+    fun requestRefresh() {
+        notifyUi()
+    }
+
+    private fun changed() {
+        onChanged?.invoke()
+        observers.toList().forEach { it() }
+    }
+
     private fun notifyUi(id: Int = generation) {
-        main.post { if (id == generation) onChanged?.invoke() }
+        main.post { if (id == generation) changed() }
     }
 
     private fun publish(
@@ -73,7 +95,7 @@ class MonitorEngine {
                 observation.add(next.time, next.battery)
                 history.addLast(next)
                 while (history.size > 180) history.removeFirst()
-                onChanged?.invoke()
+                changed()
             }
         }
     }
@@ -274,7 +296,7 @@ class MonitorEngine {
                         scanning = false
                         scanProgress = "Scanare terminată"
                         onReport?.invoke(result)
-                        onChanged?.invoke()
+                        changed()
                     }
                 }
             } catch (e: Exception) {
@@ -284,7 +306,7 @@ class MonitorEngine {
                     ) {
                         scanning = false
                         scanProgress = "Scanare incompletă: ${e.message}"
-                        onChanged?.invoke()
+                        changed()
                     }
                 }
             }
@@ -292,10 +314,19 @@ class MonitorEngine {
     }
 
     fun resetTrip() {
-        worker.execute { meter.reset() }
-        history.clear()
-        sample = sample.copy(trip = TripSnapshot())
-        notifyUi()
+        val id = generation
+        worker.execute {
+            meter.reset()
+            main.post {
+                if (id == generation) {
+                    lastEndReason = "Călătorie încheiată manual"
+                    journey++
+                    history.clear()
+                    sample = LiveSample()
+                    changed()
+                }
+            }
+        }
     }
 
     private fun fail(
@@ -313,13 +344,15 @@ class MonitorEngine {
                 scanning = false
                 status = message
                 observation.stop()
-                onChanged?.invoke()
+                changed()
             }
         }
     }
 
     fun disconnect(reason: String = "Deconectat") {
+        lastEndReason = reason
         generation++
+        journey++
         polling?.cancel(false)
         polling = null
         transport?.close()

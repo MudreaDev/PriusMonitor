@@ -46,6 +46,37 @@ class MonitorInstrumentation : Instrumentation() {
                 check(texts().any { it == "—" })
                 check(texts().contains("Prius Monitor"))
             }
+            step("Trip journal persists nullable samples, exports CSV and recovers interrupted trips") {
+                val name = "monitor-check-${System.currentTimeMillis()}.db"
+                val journal = TripStore(targetContext, name)
+                try {
+                    val id = journal.start(true, "DEMO", "Test", 1000)
+                    val sample = LiveSample(2000, ObdData(speed = 42f, rpm = 1200f), null)
+                    journal.record(id, sample)
+                    check(journal.get(id)?.count == 1)
+                    check(
+                        journal
+                            .samples(id)
+                            .single()
+                            .obd.coolant == null,
+                    )
+                    val csv =
+                        java.io
+                            .StringWriter()
+                            .also { journal.exportCsv(id, it) }
+                            .toString()
+                    check(csv.contains("speed_kmh"))
+                    check(csv.contains("true;1970-01-01"))
+                    journal.recoverInterrupted()
+                    check(journal.get(id)?.ended == 2000L)
+                    check(journal.get(id)?.reason?.contains("întrerupt") == true)
+                    journal.delete(id)
+                    check(journal.samples(id).isEmpty())
+                } finally {
+                    journal.close()
+                    targetContext.deleteDatabase(name)
+                }
+            }
             step("Connection screen offers a separate Demo") {
                 click("Conexiune")
                 check(texts().any { it.contains("Pornește modul Demo") })
@@ -120,6 +151,8 @@ class MonitorInstrumentation : Instrumentation() {
                 click("Erori")
                 click("Citește codurile de eroare")
                 waitUntil { texts().contains("P0A80") }
+                val reportTime = (targetContext.applicationContext as MonitorApplication).engine.report!!.time
+                waitUntil { ReportStore(targetContext).list().any { it.name == "scan-$reportTime.json" } }
                 val files = ReportStore(targetContext).list()
                 check(files.isNotEmpty())
                 check(ReportStore(targetContext).read(files.first()).demo)
@@ -143,6 +176,18 @@ class MonitorInstrumentation : Instrumentation() {
                 click("Acasă")
                 check(texts().none { it.contains("MOD DEMO") })
                 check(texts().any { it == "—" })
+            }
+            step("Recorded journeys remain available after disconnect") {
+                val app = targetContext.applicationContext as MonitorApplication
+                waitUntil { app.trips.list().any { it.demo && it.ended != null && it.count > 0 } }
+                click("Consum")
+                click("Istoricul călătoriilor")
+                waitUntil { texts().contains("Deschide călătoria") }
+                screenshot("istoric")
+                click("Deschide călătoria")
+                waitUntil { texts().contains("CĂLĂTORIE DEMO") }
+                check(texts().contains("Exportă toate eșantioanele CSV"))
+                screenshot("calatorie")
             }
             finish(0, Bundle().apply { putString("stream", "\nALL ${steps.size} DEVICE CHECKS PASSED\n") })
         } catch (e: Throwable) {
