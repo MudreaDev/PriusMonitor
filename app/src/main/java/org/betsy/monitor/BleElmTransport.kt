@@ -35,7 +35,8 @@ class BleElmTransport(
     @Volatile private var gatt: BluetoothGatt? = null
 
     @Volatile private var notify: BluetoothGattCharacteristic? = null
-    private var write: BluetoothGattCharacteristic? = null
+
+    @Volatile private var write: BluetoothGattCharacteristic? = null
     override var readTimeoutMs = 2500
     var profileLabel = "BLE UART"
         private set

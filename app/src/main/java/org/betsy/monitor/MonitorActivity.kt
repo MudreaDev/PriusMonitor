@@ -21,7 +21,6 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
-import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -43,6 +42,10 @@ class MonitorActivity : Activity() {
     private lateinit var connection: TextView
     private lateinit var nav: LinearLayout
     private var page = "Acasă"
+    private var renderedPage = ""
+    private var navPage = ""
+    private var navigationVersion = 0
+    private var tripLoadVersion = 0
     private var loadedReport: ScanReport? = null
     private val pendingExports by lazy { PendingExport(this) }
     private val bleDiscovery by lazy { BleDiscovery(this) { if (uiVisible && page == "Conexiune") refresh() } }
@@ -175,7 +178,7 @@ class MonitorActivity : Activity() {
         text: String,
         primary: Boolean = false,
         action: () -> Unit,
-    ) = Button(this).apply {
+    ) = MonitorButton(this, action, primary).apply {
         this.text = text
         isAllCaps = false
         textSize = 14f
@@ -184,7 +187,6 @@ class MonitorActivity : Activity() {
         minHeight = dp(48)
         minimumHeight = dp(48)
         setPadding(dp(12), dp(6), dp(12), dp(6))
-        setOnClickListener { action() }
         contentDescription = text
     }
 
@@ -293,6 +295,7 @@ class MonitorActivity : Activity() {
     }
 
     private fun navigate(next: String) {
+        navigationVersion++
         if (page == "Conexiune" && next != page) bleDiscovery.stop(false)
         page = next
         loadedReport = null
@@ -320,7 +323,8 @@ class MonitorActivity : Activity() {
     private fun render() {
         if (isFinishing || isDestroyed) return
         val y = scroll.scrollY
-        body.removeAllViews()
+        val attachedBody = body
+        body = column()
         connection.text =
             if (engine.demo) {
                 "●  DEMO · DATE SIMULATE"
@@ -338,24 +342,7 @@ class MonitorActivity : Activity() {
                 muted
             },
         )
-        nav.removeAllViews()
-        listOf("Acasă", "Consum", "Baterie", "Erori", "Conexiune").forEachIndexed { index, item ->
-            val selected = page == item || (item == "Baterie" && page == "Sănătate baterie")
-            val tint = if (selected) accent else muted
-            val destination =
-                column().apply {
-                    gravity = Gravity.CENTER
-                    setPadding(0, dp(4), 0, dp(4))
-                    minimumHeight = dp(56)
-                    contentDescription = item
-                    isClickable = true
-                    isFocusable = true
-                    setOnClickListener { navigate(item) }
-                    addView(NavIcon(this@MonitorActivity, index, tint), LinearLayout.LayoutParams(dp(24), dp(24)))
-                    addView(label(item, 10f, tint).apply { gravity = Gravity.CENTER })
-                }
-            nav.addView(destination, LinearLayout.LayoutParams(0, -2, 1f))
-        }
+        if (navPage != page) renderNavigation()
         body.addView(label(page, 25f, ink, true))
         gap(body, 4)
         body.addView(label(subtitle(), 12f, muted))
@@ -379,7 +366,50 @@ class MonitorActivity : Activity() {
             "Rapoarte" -> reportsPage()
             "Raport" -> loadedReport?.let { showReport(it) }
         }
-        scroll.post { scroll.scrollTo(0, y) }
+        val fresh = body
+        body = attachedBody
+        if (renderedPage == page && LiveViews.compatible(body, fresh)) {
+            LiveViews.update(body, fresh)
+        } else {
+            body.removeAllViews()
+            while (fresh.childCount > 0) {
+                val child = fresh.getChildAt(0)
+                fresh.removeViewAt(0)
+                body.addView(child)
+            }
+            scroll.post { scroll.scrollTo(0, y) }
+        }
+        renderedPage = page
+    }
+
+    private fun renderNavigation() {
+        navPage = page
+        nav.removeAllViews()
+        val active =
+            when (page) {
+                "Sănătate baterie" -> "Baterie"
+                "Istoric călătorii", "Călătorie" -> "Consum"
+                "Parametri OBD" -> "Acasă"
+                "Rapoarte", "Raport", "Emisii OBD" -> "Erori"
+                else -> page
+            }
+        listOf("Acasă", "Consum", "Baterie", "Erori", "Conexiune").forEachIndexed { index, item ->
+            val selected = active == item
+            val tint = if (selected) accent else muted
+            val destination =
+                column().apply {
+                    gravity = Gravity.CENTER
+                    setPadding(0, dp(4), 0, dp(4))
+                    minimumHeight = dp(56)
+                    contentDescription = item
+                    isClickable = true
+                    isFocusable = true
+                    setOnClickListener { navigate(item) }
+                    addView(NavIcon(this@MonitorActivity, index, tint), LinearLayout.LayoutParams(dp(24), dp(24)))
+                    addView(label(item, 10f, tint).apply { gravity = Gravity.CENTER })
+                }
+            nav.addView(destination, LinearLayout.LayoutParams(0, -2, 1f))
+        }
     }
 
     private fun subtitle(): String =
@@ -388,7 +418,7 @@ class MonitorActivity : Activity() {
             "Consum" -> "Călătoria continuă și când te oprești în trafic."
             "Baterie" -> "14 blocuri HV · tensiuni, temperaturi și curent."
             "Erori" -> "Citire ECU motor și hibrid · fără ștergerea codurilor."
-            "Conexiune" -> "VIECAR / ELM327 · Bluetooth Classic SPP."
+            "Conexiune" -> "VIECAR / ELM327 · Bluetooth Classic și BLE."
             "Setări" -> "Preferințele tale, salvate pe telefon."
             "Sănătate baterie" -> "Observații măsurate · SOC și SOH explicate corect."
             "Parametri OBD" -> "Valorile disponibile de la ECU-ul mașinii."
@@ -1113,8 +1143,10 @@ class MonitorActivity : Activity() {
         id: Long,
         restoredY: Int = 0,
     ) {
+        val navigation = navigationVersion
+        val request = ++tripLoadVersion
         app.query({ app.trips.get(id) to app.trips.samples(id) }) { result ->
-            if (isDestroyed || isFinishing) return@query
+            if (isDestroyed || isFinishing || navigation != navigationVersion || request != tripLoadVersion) return@query
             result
                 .onSuccess { (trip, samples) ->
                     if (trip == null) {

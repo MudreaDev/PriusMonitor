@@ -11,11 +11,28 @@ import kotlin.math.max
 
 class LineChart(
     context: Context,
-    private val values: List<Float?>,
-    private val accent: Int,
-    private val caption: String,
+    private var values: List<Float?>,
+    private var accent: Int,
+    private var caption: String,
 ) : View(context) {
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    init {
+        describe()
+    }
+
+    private fun describe() {
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
+        contentDescription = "$caption. ${values.lastOrNull()?.let { "Ultima valoare: $it" } ?: "Ultima citire indisponibilă"}"
+    }
+
+    fun updateFrom(other: LineChart) {
+        values = other.values
+        accent = other.accent
+        caption = other.caption
+        describe()
+        invalidate()
+    }
 
     override fun onDraw(c: Canvas) {
         super.onDraw(c)
@@ -64,9 +81,24 @@ class LineChart(
 
 class HvChart(
     context: Context,
-    private val volts: List<Float>,
+    private var volts: List<Float>,
 ) : View(context) {
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    init {
+        describe()
+    }
+
+    private fun describe() {
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
+        contentDescription = "Tensiunile blocurilor HV: " + volts.mapIndexed { i, v -> "bloc ${i + 1}: $v V" }.joinToString(", ")
+    }
+
+    fun updateFrom(other: HvChart) {
+        volts = other.volts
+        describe()
+        invalidate()
+    }
 
     override fun onDraw(c: Canvas) {
         val d = resources.displayMetrics.density

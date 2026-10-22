@@ -140,6 +140,24 @@ class MonitorInstrumentation : Instrumentation() {
                 check(texts().any { it.contains("ESTIMAT") })
                 screenshot("consum")
             }
+            step("Live telemetry preserves attached controls and updates button actions") {
+                val heading = views().filterIsInstance<TextView>().first { it.text.toString() == "CONSUM INSTANTANEU" }
+                val navigation = views().first { it.isClickable && it.contentDescription?.toString() == "Consum" }
+                val engine = (targetContext.applicationContext as MonitorApplication).engine
+                val before = engine.sample.time
+                waitUntil { engine.sample.time > before + 1500 }
+                check(views().any { it === heading })
+                check(views().any { it === navigation })
+                runOnMainSync {
+                    var clicked = ""
+                    val old = MonitorButton(activity, { clicked = "old" }, false)
+                    val fresh = MonitorButton(activity, { clicked = "new" }, true)
+                    check(LiveViews.compatible(old, fresh))
+                    LiveViews.update(old, fresh)
+                    old.performClick()
+                    check(clicked == "new")
+                }
+            }
             if (Build.VERSION.SDK_INT >= 29) {
                 step("Trip export writes real contents and preserves the Demo session") {
                     val resolver = targetContext.contentResolver

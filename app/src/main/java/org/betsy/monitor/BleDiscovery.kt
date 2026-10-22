@@ -29,6 +29,7 @@ class BleDiscovery(
     private var callback: ScanCallback? = null
     private var generation = 0
     private val timeout = Runnable { stop() }
+    private val refresh = Runnable { if (active) changed() }
     var active = false
         private set
     var message = "Căutare opțională pentru adaptoare Bluetooth Low Energy."
@@ -69,7 +70,8 @@ class BleDiscovery(
                             val name =
                                 result.scanRecord?.deviceName ?: runCatching { device.name }.getOrNull() ?: "Dispozitiv BLE fără nume"
                             found[address] = BleCandidate(device, name, result.rssi)
-                            changed()
+                            handler.removeCallbacks(refresh)
+                            handler.postDelayed(refresh, 250)
                         }
                     }
 
@@ -99,6 +101,7 @@ class BleDiscovery(
     fun stop(notify: Boolean = true) {
         generation++
         handler.removeCallbacks(timeout)
+        handler.removeCallbacks(refresh)
         callback?.let { runCatching { scanner?.stopScan(it) } }
         callback = null
         scanner = null
