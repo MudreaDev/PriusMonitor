@@ -25,6 +25,7 @@ object SampleCodec {
             .put("estimated", t.estimated)
             .put("stoppedLiters", t.stoppedLiters)
             .put("stoppedSeconds", t.stoppedSeconds)
+            .put("stoppedCoveredSeconds", t.stoppedCoveredSeconds)
 
     fun tripFrom(j: JSONObject): TripSnapshot =
         TripSnapshot(
@@ -36,6 +37,8 @@ object SampleCodec {
             estimated = j.getBoolean("estimated"),
             stoppedLiters = j.getDouble("stoppedLiters"),
             stoppedSeconds = j.getDouble("stoppedSeconds"),
+            // Added in v1.1: older records default to 0 (unknown coverage — UI shows correctly).
+            stoppedCoveredSeconds = if (j.has("stoppedCoveredSeconds")) j.getDouble("stoppedCoveredSeconds") else 0.0,
         )
 
     fun json(s: LiveSample): String {

@@ -13,24 +13,29 @@ import java.util.concurrent.TimeUnit
 class DeadlineBluetoothTransport(
     device: BluetoothDevice,
 ) : ConnectableTransport {
-    private val socket: BluetoothSocket = device.createRfcommSocketToServiceRecord(UUID.fromString("00001101-0000-1000-8000-00805F9B34FB"))
+    private val connector =
+        SocketConnector(
+            listOf(
+                "SPP securizat" to { device.createRfcommSocketToServiceRecord(SPP) },
+                "SPP compatibil" to { device.createInsecureRfcommSocketToServiceRecord(SPP) },
+            ),
+            BluetoothSocket::connect,
+        )
+
+    @Volatile private var socket: BluetoothSocket? = null
 
     @Volatile private var closed = false
     override var readTimeoutMs = 2500
 
     override fun connect() {
-        val watchdog = WATCHDOG.schedule({ close() }, 18, TimeUnit.SECONDS)
-        try {
-            socket.connect()
-        } finally {
-            watchdog.cancel(false)
-        }
+        socket = connector.connect()
     }
 
     override suspend fun send(cmd: String): String {
         check(!closed) { "Conexiune închisă" }
-        val input = socket.inputStream
-        val output = socket.outputStream
+        val active = socket ?: throw TransportException("Conexiune Bluetooth indisponibilă")
+        val input = active.inputStream
+        val output = active.outputStream
         val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(readTimeoutMs.toLong())
         // Also covers a blocked write, not just waiting for a reply.
         val watchdog = WATCHDOG.schedule({ close() }, readTimeoutMs.toLong() + 500, TimeUnit.MILLISECONDS)
@@ -59,12 +64,14 @@ class DeadlineBluetoothTransport(
     override fun close() {
         closed = true
         try {
-            socket.close()
+            connector.close()
+            socket = null
         } catch (_: Exception) {
         }
     }
 
     companion object {
+        private val SPP = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
         private val WATCHDOG = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "OBD-timeout").apply { isDaemon = true } }
     }
 }

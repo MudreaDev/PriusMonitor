@@ -19,6 +19,7 @@ class MonitorApplication : Application() {
     private var trackedOpen = false
     private var lastSample: LiveSample? = null
     private var lastReportTime = 0L
+    private var lastSeenStatus = ""
 
     // Accessed only on io, with all record/start/finish operations in queue order.
     private var activeId: Long? = null
@@ -36,7 +37,21 @@ class MonitorApplication : Application() {
         super.onCreate()
         trips = TripStore(this)
         write { trips.recoverInterrupted() }
-        engine.addObserver { journalChanged() }
+        engine.addObserver {
+            journalChanged()
+            val status = engine.status
+            if (status != lastSeenStatus) {
+                lastSeenStatus = status
+                if (status.startsWith("Conexiune nereușită") || status.startsWith("Conexiune întreruptă")) {
+                    getSharedPreferences("prius-monitor", MODE_PRIVATE)
+                        .edit()
+                        .putString("last_connection_error", status)
+                        .putLong("last_connection_error_time", System.currentTimeMillis())
+                        .apply()
+                    engine.requestRefresh()
+                }
+            }
+        }
     }
 
     fun connect(

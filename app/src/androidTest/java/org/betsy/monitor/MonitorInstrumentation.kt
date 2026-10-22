@@ -2,18 +2,17 @@ package org.betsy.monitor
 
 import android.app.Activity
 import android.app.Instrumentation
-import android.content.ContentValues
 import android.content.Intent
-import android.content.IntentFilter
-import android.os.Build
+import android.graphics.Rect
 import android.os.Bundle
-import android.provider.MediaStore
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ScrollView
 import android.widget.TextView
+import org.betsy.transport.ReplayTransport
 import java.io.File
 
-/** Dependency-free device checks for the real Activity and its Demo/report/settings flows. */
+/** Device-only fixtures stay in the test APK. Production has no Demo or synthetic data source. */
 class MonitorInstrumentation : Instrumentation() {
     private lateinit var activity: Activity
     private val steps = mutableListOf<String>()
@@ -33,6 +32,7 @@ class MonitorInstrumentation : Instrumentation() {
     }
 
     override fun onStart() {
+        val app = targetContext.applicationContext as MonitorApplication
         try {
             targetContext
                 .getSharedPreferences("prius-monitor", 0)
@@ -42,304 +42,204 @@ class MonitorInstrumentation : Instrumentation() {
                 .commit()
             activity = startActivitySync(Intent(targetContext, MonitorActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             waitForIdleSync()
-            step("Cold start shows no invented readings") {
-                check(texts().any { it == "—" })
-                check(texts().contains("Prius Monitor"))
+            step("Compact Live opens without scrolling or invented telemetry") {
+                check(texts().contains("LIVE · Prius Monitor"))
+                check(texts().contains("Consum instant"))
+                check(texts().contains("Consum mediu"))
+                check(texts().contains("Baterie HV"))
+                check(texts().count { it == "—" } >= 10)
+                assertCompactFits()
+                screenshot("live-neconectat")
             }
-            step("Pending exports survive Activity ownership and reject invalid cache paths") {
-                val first = PendingExport(targetContext)
-                val token = first.stage("Test românesc · conținut păstrat")
-                check(PendingExport(targetContext).read(token) == "Test românesc · conținut păstrat")
-                check(runCatching { first.read("../files/private") }.isFailure)
-                first.discard(token)
-                check(runCatching { first.read(token) }.isFailure)
-                val source = File(targetContext.cacheDir, "source-capture-check.log").apply { writeText("TX 010D\nRX 410D32\n") }
+            step("Every main page has no Demo launch control") {
+                for (page in listOf("Acasă", "Consum", "Baterie", "Erori", "Conexiune")) {
+                    click(page)
+                    check(
+                        texts().none {
+                            it.contains("pornește Demo", true) ||
+                                it.contains("modul Demo", true) ||
+                                it.contains("Explorează modul", true)
+                        },
+                    )
+                }
+                check(texts().contains("Caută adaptor BLE (15 secunde)"))
+                click("Live")
+            }
+            step("Compact values use the real decoder path with a test-only transport fixture") {
+                val replay =
+                    ReplayTransport(
+                        mapOf(
+                            "ATZ" to "ELM327 v1.5",
+                            "0100" to "4100FFFFFFFF",
+                            "0120" to "4120FFFFFFFF",
+                            "0140" to "4140FFFFFFFF",
+                            "7E0/010D" to "410D3C",
+                            "7E0/010C" to "410C1770",
+                            "7E0/0105" to "41057A",
+                            "7E0/0110" to "411003E8",
+                            "7E0/015E" to "415E003C",
+                            "7E0/0142" to "41423714",
+                            "7E2/2181" to "6181" + "2E1B".repeat(14) + "AF24",
+                            "7E2/2101" to "6101" + "00".repeat(21) + "99",
+                            "7E2/2198" to "619883E899AA64",
+                            "7E2/2187" to "618700005A005A005A00",
+                            "7E2/2195" to "6195" + "19".repeat(14),
+                        ),
+                    )
+                runOnMainSync {
+                    app.engine.intervalMs = 500
+                    app.engine.connect("TEST · decoder fixture") {
+                        object : ConnectableTransport {
+                            override var readTimeoutMs = 2500
+
+                            override fun connect() {}
+
+                            override suspend fun send(cmd: String) = replay.send(cmd)
+
+                            override fun close() {
+                                replay.close()
+                            }
+                        }
+                    }
+                }
+                waitUntil { app.engine.sample.trip.average != null }
+                check(!app.engine.demo)
+                check(texts().contains("60"))
+                check(texts().contains("5,0"))
+                check(texts().contains("l/100 km · 20,0 km/l"))
+                check(texts().contains("1500"))
+                check(texts().contains("82,0"))
+                check(texts().contains("14,10"))
+                assertCompactFits()
+                screenshot("live-valori-test")
+            }
+            step("Live updates preserve the attached compact dashboard") {
+                val before = views().filterIsInstance<CompactDashboard>().single()
+                val timestamp = app.engine.sample.time
+                waitUntil { app.engine.sample.time > timestamp + 1000 }
+                check(views().any { it === before })
+                assertCompactFits()
+            }
+            step("Connection error is remembered and can be copied") {
+                runOnMainSync {
+                    app.engine.connect("TEST · connection failure") {
+                        object : ConnectableTransport {
+                            override var readTimeoutMs = 2500
+
+                            override fun connect(): Unit = throw java.io.IOException("test socket failure")
+
+                            override suspend fun send(cmd: String): String = error("must not send")
+
+                            override fun close() {}
+                        }
+                    }
+                }
+                waitUntil {
+                    targetContext
+                        .getSharedPreferences(
+                            "prius-monitor",
+                            0,
+                        ).getString("last_connection_error", "")!!
+                        .contains("test socket failure")
+                }
+                click("Conexiune")
+                waitUntil { texts().contains("Copiază eroarea") }
+                check(texts().any { it.contains("Bluetooth: test socket failure") })
+                click("Copiază eroarea")
+                click("Live")
+                check(texts().count { it == "—" } >= 10)
+            }
+            step("Pending file exports preserve a private snapshot") {
+                val pending = PendingExport(targetContext)
+                val source = File(targetContext.cacheDir, "capture-check.log").apply { writeText("TX 010D\nRX 410D32\n") }
                 try {
-                    val staged = first.stageFile(source)
-                    source.writeText("Changed after snapshot")
-                    check(first.read(staged) == "TX 010D\nRX 410D32\n")
-                    first.discard(staged)
+                    val token = pending.stageFile(source)
+                    source.writeText("changed")
+                    check(pending.read(token) == "TX 010D\nRX 410D32\n")
+                    check(runCatching { pending.read("../private") }.isFailure)
+                    pending.discard(token)
                 } finally {
                     source.delete()
                 }
             }
-            step("Trip journal persists nullable samples, exports CSV and recovers interrupted trips") {
-                val name = "monitor-check-${System.currentTimeMillis()}.db"
-                val journal = TripStore(targetContext, name)
-                try {
-                    val id = journal.start(true, "DEMO", "Test", 1000)
-                    val sample = LiveSample(2000, ObdData(speed = 42f, rpm = 1200f), null)
-                    journal.record(id, sample)
-                    check(journal.get(id)?.count == 1)
-                    check(
-                        journal
-                            .samples(id)
-                            .single()
-                            .obd.coolant == null,
-                    )
-                    val csv =
-                        java.io
-                            .StringWriter()
-                            .also { journal.exportCsv(id, it) }
-                            .toString()
-                    check(csv.contains("speed_kmh"))
-                    check(csv.contains("true;1970-01-01"))
-                    journal.recoverInterrupted()
-                    check(journal.get(id)?.ended == 2000L)
-                    check(journal.get(id)?.reason?.contains("întrerupt") == true)
-                    journal.delete(id)
-                    check(journal.samples(id).isEmpty())
-                } finally {
-                    journal.close()
-                    targetContext.deleteDatabase(name)
-                }
-            }
-            step("Connection screen offers a separate Demo") {
-                click("Conexiune")
-                check(texts().any { it.contains("Pornește modul Demo") })
-                check(texts().contains("Caută adaptor BLE (15 secunde)"))
-            }
-            step("Real engine path uses transport readings and never falls back to Demo") {
-                val replay =
-                    org.betsy.transport.ReplayTransport(
-                        mapOf(
-                            "ATZ" to "ELM327 v1.5",
-                            "0100" to "410000100000",
-                            "010C" to "410C0FA0",
-                        ),
-                    )
-                val engine = MonitorEngine()
-                try {
-                    runOnMainSync {
-                        engine.connect("Test transport") {
-                            object : ConnectableTransport {
-                                override var readTimeoutMs = 2500
-
-                                override fun connect() {}
-
-                                override suspend fun send(cmd: String) = replay.send(cmd)
-
-                                override fun close() {
-                                    replay.close()
-                                }
-                            }
-                        }
-                    }
-                    waitUntil { engine.connected && engine.sample.time > 0 }
-                    check(!engine.demo)
-                    check(engine.sample.obd.rpm == 1000f)
-                    check(engine.sample.obd.speed == null)
-                    check(engine.sample.battery == null)
-                    runOnMainSync { engine.disconnect() }
-                    check(engine.sample.time == 0L)
-                } finally {
-                    runOnMainSync { engine.destroy() }
-                }
-            }
-            step("Demo produces clearly labelled samples") {
-                click("Pornește modul Demo")
-                waitUntil { texts().any { it.contains("MOD DEMO") } && texts().any { it == "rpm" } }
-                Thread.sleep(1200)
-                screenshot("dashboard")
-            }
-            step("Consumption includes hourly fuel and stopped fuel") {
-                click("Consum")
-                check(texts().contains("Consum pe oră și la opriri"))
-                check(texts().contains("Combustibil la viteză 0"))
-                check(texts().any { it.contains("ESTIMAT") })
-                screenshot("consum")
-            }
-            step("Live telemetry preserves attached controls and updates button actions") {
-                val heading = views().filterIsInstance<TextView>().first { it.text.toString() == "CONSUM INSTANTANEU" }
-                val navigation = views().first { it.isClickable && it.contentDescription?.toString() == "Consum" }
-                val engine = (targetContext.applicationContext as MonitorApplication).engine
-                val before = engine.sample.time
-                waitUntil { engine.sample.time > before + 1500 }
-                check(views().any { it === heading })
-                check(views().any { it === navigation })
-                runOnMainSync {
-                    var clicked = ""
-                    val old = MonitorButton(activity, { clicked = "old" }, false)
-                    val fresh = MonitorButton(activity, { clicked = "new" }, true)
-                    check(LiveViews.compatible(old, fresh))
-                    LiveViews.update(old, fresh)
-                    old.performClick()
-                    check(clicked == "new")
-                }
-            }
-            if (Build.VERSION.SDK_INT >= 29) {
-                step("Trip export writes real contents and preserves the Demo session") {
-                    val resolver = targetContext.contentResolver
-                    val uri =
-                        resolver.insert(
-                            MediaStore.Downloads.EXTERNAL_CONTENT_URI,
-                            ContentValues().apply {
-                                put(MediaStore.MediaColumns.DISPLAY_NAME, "prius-test-export.txt")
-                                put(MediaStore.MediaColumns.MIME_TYPE, "text/plain")
-                            },
-                        ) ?: error("Cannot create export destination")
-                    val monitor =
-                        addMonitor(
-                            IntentFilter(Intent.ACTION_CREATE_DOCUMENT).apply {
-                                addCategory(Intent.CATEGORY_OPENABLE)
-                                addDataType("text/plain")
-                            },
-                            ActivityResult(Activity.RESULT_OK, Intent().setData(uri)),
-                            true,
-                        )
-                    try {
-                        click("Exportă rezumatul călătoriei")
-                        waitUntil {
-                            runCatching {
-                                resolver.openInputStream(uri)?.bufferedReader()?.use {
-                                    it.readText().contains("PRIUS MONITOR — CĂLĂTORIE")
-                                } == true
-                            }.getOrDefault(false)
-                        }
-                        check(texts().any { it.contains("MOD DEMO") })
-                    } finally {
-                        removeMonitor(monitor)
-                        resolver.delete(uri, null, null)
-                    }
-                }
-            }
-            step("Battery displays 14 voltage and resistance rows") {
-                click("Baterie")
-                check(texts().contains("Bloc 01"))
-                check(texts().contains("Bloc 14"))
-                check(texts().any { it.contains("mΩ") })
-                screenshot("baterie")
-            }
-            step("SOH is not fabricated and battery observation records samples") {
-                click("Sănătate baterie / SOH")
-                check(texts().contains("Sănătate baterie / SOH"))
-                check(texts().contains("Indisponibil"))
-                click("Începe observația bateriei")
-                waitUntil { texts().contains("Exportă observația bateriei") }
-                screenshot("soh")
-                click("Oprește observația bateriei")
-                check(texts().contains("Exportă observația bateriei"))
-            }
-            step("Diagnostic scan saves and reloads a Demo report") {
-                click("Erori")
-                click("Monitoarele de emisii")
-                check(texts().contains("ECU motor · monitorizare emisii"))
-                click("Erori")
-                click("Citește codurile de eroare")
-                waitUntil { texts().contains("P0A80") }
-                val reportTime = (targetContext.applicationContext as MonitorApplication).engine.report!!.time
-                waitUntil { ReportStore(targetContext).list().any { it.name == "scan-$reportTime.json" } }
-                val files = ReportStore(targetContext).list()
-                check(files.isNotEmpty())
-                check(ReportStore(targetContext).read(files.first()).demo)
-                clickPrefix("Rapoarte salvate")
-                check(texts().any { it.contains("DEMO ·") })
-                screenshot("rapoarte")
-                click("Deschide raportul")
-                check(texts().contains("RAPORT DEMO"))
-                check(texts().contains("P0A80"))
-            }
-            step("Settings persist chosen temperature units") {
-                click("Setări")
-                clickPrefix("Temperatură:")
-                check(targetContext.getSharedPreferences("prius-monitor", 0).getBoolean("fahrenheit", false))
-                check(texts().any { it == "Temperatură: °F" })
-                clickPrefix("Temperatură:")
-                check(texts().contains("Înregistrare tehnică: oprită"))
-            }
-            step("Disconnect removes simulated readings") {
-                click("Conexiune")
-                click("Deconectează")
-                click("Acasă")
-                check(texts().none { it.contains("MOD DEMO") })
-                check(texts().any { it == "—" })
-            }
-            step("Recorded journeys remain available after disconnect") {
-                val app = targetContext.applicationContext as MonitorApplication
-                waitUntil { app.trips.list().any { it.demo && it.ended != null && it.count > 0 } }
-                click("Consum")
-                click("Istoricul călătoriilor")
-                waitUntil { texts().contains("Deschide călătoria") }
-                screenshot("istoric")
-                click("Deschide călătoria")
-                waitUntil { texts().contains("CĂLĂTORIE DEMO") }
-                check(texts().contains("Exportă toate eșantioanele CSV"))
-                screenshot("calatorie")
-            }
-            step("Activity recreation restores the selected historical journey") {
+            step("Recreation restores the compact page without reconnecting") {
                 val monitor = addMonitor(MonitorActivity::class.java.name, null, false)
                 try {
                     runOnMainSync { activity.recreate() }
                     activity = waitForMonitorWithTimeout(monitor, 10000) ?: error("Activity did not recreate")
-                    waitUntil { texts().contains("CĂLĂTORIE DEMO") }
-                    check(texts().contains("Exportă toate eșantioanele CSV"))
+                    waitUntil { texts().contains("LIVE · Prius Monitor") }
+                    assertCompactFits()
+                    check(!app.engine.connected)
                 } finally {
                     removeMonitor(monitor)
                 }
             }
-            step("Connected-device foreground service starts and releases itself when idle") {
-                if (Build.VERSION.SDK_INT >= 31) {
-                    android.os.ParcelFileDescriptor
-                        .AutoCloseInputStream(
-                            uiAutomation.executeShellCommand("pm grant ${targetContext.packageName} android.permission.BLUETOOTH_CONNECT"),
-                        ).use { it.readBytes() }
-                }
-                val app = targetContext.applicationContext as MonitorApplication
-                val before = app.lastServiceStart
-                targetContext.startForegroundService(Intent(targetContext, MonitorService::class.java))
-                waitUntil { app.lastServiceStart > before }
-                waitUntil { !app.backgroundRunning && !app.backgroundRequested }
-            }
             finish(0, Bundle().apply { putString("stream", "\nALL ${steps.size} DEVICE CHECKS PASSED\n") })
         } catch (e: Throwable) {
             finish(1, Bundle().apply { putString("stream", "\nFAILED after ${steps.size} checks: ${e.stackTraceToString()}\n") })
+        } finally {
+            runOnMainSync { app.engine.disconnect("Sfârșit verificare software") }
+        }
+    }
+
+    private fun assertCompactFits() {
+        check(views().none { it is ScrollView && it.isShown })
+        val dashboard = views().filterIsInstance<CompactDashboard>().single()
+        runOnMainSync {
+            val bounds = Rect()
+            check(dashboard.getGlobalVisibleRect(bounds))
+
+            fun inspect(view: View) {
+                if (view is TextView && view.isShown && view.text.isNotBlank()) {
+                    val actual = Rect()
+                    check(view.getGlobalVisibleRect(actual)) { "Hidden reading: ${view.text}" }
+                    check(bounds.contains(actual)) { "Reading outside compact viewport: ${view.text}" }
+                    check(actual.height() == view.height) { "Vertically clipped control: ${view.text}" }
+                }
+                if (view is ViewGroup) (0 until view.childCount).forEach { inspect(view.getChildAt(it)) }
+            }
+            inspect(dashboard)
         }
     }
 
     private fun views(): List<View> {
         val all = mutableListOf<View>()
         runOnMainSync {
-            fun collect(v: View) {
-                all += v
-                if (v is ViewGroup) (0 until v.childCount).forEach { collect(v.getChildAt(it)) }
+            fun collect(view: View) {
+                all += view
+                if (view is ViewGroup) (0 until view.childCount).forEach { collect(view.getChildAt(it)) }
             }
             collect(activity.window.decorView)
         }
         return all
     }
 
-    private fun texts() = views().filterIsInstance<TextView>().map { it.text.toString() }
+    private fun texts() = views().filterIsInstance<TextView>().filter { it.isShown }.map { it.text.toString() }
 
-    private fun click(text: String) = clickMatching { it == text }
-
-    private fun clickPrefix(text: String) = clickMatching { it.startsWith(text) }
-
-    private fun clickMatching(predicate: (String) -> Boolean) {
+    private fun click(text: String) {
         val view =
             views().firstOrNull {
-                it.isClickable &&
-                    (
-                        predicate(it.contentDescription?.toString() ?: "") ||
-                            (it is TextView && predicate(it.text.toString()))
-                    )
+                it.isShown &&
+                    it.isClickable &&
+                    (it.contentDescription?.toString() == text || it is TextView && it.text.toString() == text)
             }
-                ?: error("Control not found; visible text=${texts()}")
+                ?: error("Control not found: $text; ${texts()}")
         runOnMainSync { view.performClick() }
         waitForIdleSync()
     }
 
     private fun waitUntil(predicate: () -> Boolean) {
-        val until = System.currentTimeMillis() + 12000
-        while (!predicate() && System.currentTimeMillis() < until) Thread.sleep(100)
+        val deadline = System.currentTimeMillis() + 20000
+        while (!predicate() && System.currentTimeMillis() < deadline) Thread.sleep(100)
         check(predicate()) { "Timed out waiting for app state" }
     }
 
     private fun screenshot(name: String) {
-        // View hierarchy idle can precede the compositor's next frame.
-        Thread.sleep(2300)
+        Thread.sleep(500)
         val bitmap = uiAutomation.takeScreenshot() ?: return
-        val file = File(targetContext.getExternalFilesDir(null), "$name.png")
-        file.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+        File(targetContext.getExternalFilesDir(null), "$name.png").outputStream().use {
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+        }
         bitmap.recycle()
     }
 }

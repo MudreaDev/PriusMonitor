@@ -10,7 +10,7 @@ Aplicație Android în română pentru Toyota Prius 30 / ZVW30, bazată pe [BETS
 - Sănătate / SOH: informații despre limitele măsurării și înregistrare pasivă a valorilor HV. Fără procent de sănătate inventat.
 - Diagnosticare motor și Toyota hibrid, explicații în română pentru codurile uzuale, condiții memorate la eroare (freeze frame), monitoare emisii, rapoarte locale și export cu răspunsurile tehnice ECU.
 - Bluetooth Classic și căutare/conexiune BLE UART, permisiuni Android, limite de timp, deconectare și erori explicite.
-- Demo separat, etichetat permanent; setări pentru unități și intervalul de actualizare.
+- Ecran Live compact cu 15 indicatori, fără derulare, accesibil din bara de jos; setări pentru unități și intervalul de actualizare. Modul Demo a fost eliminat.
 
 ## Instalare
 
@@ -19,7 +19,7 @@ Aplicație Android în română pentru Toyota Prius 30 / ZVW30, bazată pe [BETS
 3. Pregătește mașina pentru citirea ECU (de regulă, READY), cu mașina în siguranță.
 4. Închide Car Scanner și alte aplicații OBD care pot ocupa adaptorul.
 5. Deschide Conexiune în Prius Monitor, acordă accesul Bluetooth și selectează VIECAR.
-6. Fără mașină, folosește Pornește modul Demo. Datele Demo sunt simulate.
+6. Dacă apare o eroare, folosește „Copiază eroarea” din Conexiune pentru a păstra mesajul complet.
 
 Permisiunea Bluetooth trebuie acordată pe telefon la prima utilizare. Nu sunt necesare cont, internet, abonament sau Play Store pentru utilizare. Pentru BLE, folosește căutarea de 15 secunde din Conexiune; sunt implementate profilurile FFF0/FFF1/FFF2, FFE0/FFE1, 18F0/2AF0/2AF1 și Nordic UART. Se verifică proprietățile caracteristicilor și inițializarea ELM327; nu se scrie în caracteristici arbitrare. BLE necesită validare pe adaptorul fizic. Android 8–11 cere acces Locație și localizarea activă pentru căutare; aplicația nu citește poziția GPS. Android 12+ cere Dispozitive din apropiere. Căutarea se oprește când părăsești ecranul/aplicația. Classic nu cere permisiunea Locație.
 
@@ -31,7 +31,7 @@ l/100 km = l/h × 100 / km/h, afișat de la 5 km/h. Media integrează debitul ș
 
 **Viteză 0 nu înseamnă Parking.** Litrii și timpul la viteză 0 sunt separați, iar călătoria continuă.
 
-Cu monitorizarea în fundal activată (implicit), o conexiune reală poate continua când folosești altă aplicație sau stingi ecranul. Serviciul afișează o notificare cu buton de oprire și menține procesorul activ pe durata conexiunii, în limita unei solicitări de 12 ore. Acest mod poate crește consumul telefonului. Schimbarea setării se aplică la următoarea conexiune. Demo se oprește când părăsești aplicația. La deconectare, ultimul rezumat rămâne exportabil din Setări. O conexiune nouă începe o călătorie nouă.
+Cu monitorizarea în fundal activată (implicit), o conexiune reală poate continua când folosești altă aplicație sau stingi ecranul. Serviciul afișează o notificare cu buton de oprire și menține procesorul activ pe durata conexiunii, în limita unei solicitări de 12 ore. Acest mod poate crește consumul telefonului. Schimbarea setării se aplică la următoarea conexiune. La deconectare, ultimul rezumat rămâne exportabil din Setări. O conexiune nouă începe o călătorie nouă.
 
 Istoricul salvează automat eșantioanele OBD și rezumatul fiecărei călătorii într-un jurnal SQLite privat. Sunt disponibile grafice și export CSV cu unități explicite, marcaj Demo și câmpuri goale pentru citirile indisponibile. O sesiune întreruptă de oprirea procesului este identificată la următoarea pornire. Rapoartele de diagnostic rămân în spațiul privat al aplicației după repornire; dezinstalarea le șterge. Nu se trimit automat date sau scanări pe internet.
 
@@ -61,7 +61,7 @@ adb install -r build/outputs/apk/androidTest/debug/PriusMonitor-debug-androidTes
 adb shell am instrument -w ro.priusmonitor.app.test/org.betsy.monitor.MonitorInstrumentation
 ```
 
-Runner-ul verifică pornirea, Demo, Consum, cele 14 blocuri, scanarea și salvarea rapoartelor, setările și deconectarea. La succes afișează ALL ... DEVICE CHECKS PASSED.
+Runner-ul verifică ecranul Live fără derulare, navigarea fără Demo, valorile dintr-un transport de test inclus exclusiv în APK-ul de test, păstrarea ecranului la actualizare, erorile de conexiune, exportul și recrearea activității. La succes afișează ALL ... DEVICE CHECKS PASSED.
 
 GitHub Actions produce artifactul PriusMonitor-debug-apk după verificări. APK-urile debug produse în medii diferite pot avea semnături diferite și pot necesita dezinstalarea versiunii vechi înaintea instalării.
 

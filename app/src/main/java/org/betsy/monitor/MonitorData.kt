@@ -107,9 +107,16 @@ data class TripSnapshot(
     val estimated: Boolean = false,
     val stoppedLiters: Double = 0.0,
     val stoppedSeconds: Double = 0.0,
+    /** Seconds at speed 0 where both interval endpoints had valid fuel data. May be less than
+     * [stoppedSeconds] when readings were missing; in that case [stoppedLiters] of 0 does NOT
+     * confirm the engine consumed nothing — it simply means no calculation was possible. */
+    val stoppedCoveredSeconds: Double = 0.0,
 ) {
     val average: Double? get() = if (distanceCoveredKm >= 0.1) liters * 100 / distanceCoveredKm else null
     val coverage: Double get() = if (seconds > 0) coveredSeconds * 100 / seconds else 0.0
+
+    /** Fraction [0..100] of [stoppedSeconds] for which the stopped-fuel total could be computed. */
+    val stoppedCoverage: Double get() = if (stoppedSeconds > 0) stoppedCoveredSeconds * 100 / stoppedSeconds else 0.0
 }
 
 /** Trapezoidal integration on a monotonic clock. Missing/long intervals never add fuel or km. */
@@ -136,6 +143,7 @@ class TripMeter {
             val b = Consumption.from(data)
             val distance = if (old.speed != null && data.speed != null) (old.speed + data.speed) / 2 * dt / 3600 else null
             val covered = distance != null && a.litersHour != null && b.litersHour != null
+            val atStop = old.speed == 0f && data.speed == 0f
             snapshot =
                 snapshot.copy(
                     seconds = snapshot.seconds + dt,
@@ -146,8 +154,9 @@ class TripMeter {
                     estimated = snapshot.estimated || (covered && (a.estimated || b.estimated)),
                     stoppedLiters =
                         snapshot.stoppedLiters +
-                            if (covered && old.speed == 0f && data.speed == 0f) (a.litersHour!! + b.litersHour!!) / 2 * dt / 3600 else 0.0,
-                    stoppedSeconds = snapshot.stoppedSeconds + if (old.speed == 0f && data.speed == 0f) dt else 0.0,
+                            if (covered && atStop) (a.litersHour!! + b.litersHour!!) / 2 * dt / 3600 else 0.0,
+                    stoppedSeconds = snapshot.stoppedSeconds + if (atStop) dt else 0.0,
+                    stoppedCoveredSeconds = snapshot.stoppedCoveredSeconds + if (covered && atStop) dt else 0.0,
                 )
         }
         previousTime = nowMs

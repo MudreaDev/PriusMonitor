@@ -59,6 +59,11 @@ class NavIcon(
             4 -> {
                 path(8f, 6f, 17f, 15f, 12f, 20f, 12f, 4f, 17f, 9f, 8f, 18f)
             }
+            5 -> {
+                c.drawCircle(12f, 12f, 9f, p)
+                path(12f, 12f, 17f, 7f)
+                c.drawLine(7f, 17f, 17f, 17f, p)
+            }
         }
         c.restoreToCount(save)
     }

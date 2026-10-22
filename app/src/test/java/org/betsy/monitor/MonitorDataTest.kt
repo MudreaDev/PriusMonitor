@@ -59,7 +59,28 @@ class MonitorDataTest {
         assertTrue(afterStop.average!! > beforeStop.average!!)
         assertEquals(.03, afterStop.stoppedLiters, .000001)
         assertEquals(60.0, afterStop.stoppedSeconds, .000001)
+        // All stopped seconds had valid fuelRate readings — coverage must be 100 %.
+        assertEquals(60.0, afterStop.stoppedCoveredSeconds, .000001)
+        assertEquals(100.0, afterStop.stoppedCoverage, .000001)
         assertEquals(100.0, afterStop.coverage, .000001)
+    }
+
+    @Test fun stopsWithMissingFuelDataShowZeroCoveredSecondsNotZeroLiters() {
+        // OBD speed is 0 but fuelRate and MAF are missing — ENGINE_STOPPED is also absent
+        // because rpm is null too. The meter must NOT count any covered stop seconds and must
+        // NOT add fuel, so the UI can distinguish "no readings" from "confirmed 0 l/h".
+        val meter = TripMeter()
+        var now = 0L
+        val noFuel = ObdData(speed = 0f, rpm = null, fuelRate = null, maf = null)
+        repeat(61) {
+            meter.update(now, noFuel)
+            now += 1000
+        }
+        val s = meter.snapshot
+        assertEquals(60.0, s.stoppedSeconds, .000001) // time at speed-0 counted
+        assertEquals(0.0, s.stoppedCoveredSeconds, .000001) // none was calculable
+        assertEquals(0.0, s.stoppedCoverage, .000001) // 0 % — UI shows "date lipsă"
+        assertEquals(0.0, s.stoppedLiters, .000001) // no fuel added (expected)
     }
 
     @Test fun gapsAndMissingSpeedDoNotCreateFuelOrDistance() {

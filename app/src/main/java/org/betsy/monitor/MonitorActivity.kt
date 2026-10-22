@@ -7,6 +7,8 @@ import android.app.AlertDialog
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -37,11 +39,13 @@ class MonitorActivity : Activity() {
     private val prefs by lazy { getSharedPreferences("prius-monitor", MODE_PRIVATE) }
     private val store by lazy { ReportStore(this) }
     private lateinit var root: LinearLayout
+    private lateinit var header: LinearLayout
+    private lateinit var compact: CompactDashboard
     private lateinit var body: LinearLayout
     private lateinit var scroll: ScrollView
     private lateinit var connection: TextView
     private lateinit var nav: LinearLayout
-    private var page = "Acasă"
+    private var page = "Live"
     private var renderedPage = ""
     private var navPage = ""
     private var navigationVersion = 0
@@ -103,11 +107,11 @@ class MonitorActivity : Activity() {
                 .Builder(this)
                 .setTitle("Bun venit în Prius Monitor")
                 .setMessage(
-                    "Asociază adaptorul VIECAR în setările Bluetooth ale telefonului, apoi selectează-l în Conexiune. Mașina trebuie să permită citirea ECU (de regulă în READY).\n\nPoți explora aplicația fără mașină folosind modul Demo. Citirile Prius 30 necesită validare pe mașina ta.",
+                    "Asociază adaptorul VIECAR în setările Bluetooth ale telefonului, apoi selectează-l în Conexiune. Mașina trebuie să permită citirea ECU (de regulă în READY). Citirile Prius 30 necesită validare pe mașina ta.",
                 ).setPositiveButton("Am înțeles", null)
                 .show()
         }
-        page = savedInstanceState?.getString("page") ?: "Acasă"
+        page = savedInstanceState?.getString("page") ?: "Live"
         exportToken = savedInstanceState?.getString("exportToken")
         pendingTripCsv = savedInstanceState?.getLong("csvTrip", -1L)?.takeIf { it >= 0 }
         documentPickerOpen = savedInstanceState?.getBoolean("documentPickerOpen", false) ?: false
@@ -267,7 +271,7 @@ class MonitorActivity : Activity() {
 
     private fun buildShell() {
         root = column().apply { setBackgroundColor(bg) }
-        val header = column().apply { setPadding(dp(22), dp(18), dp(22), dp(14)) }
+        header = column().apply { setPadding(dp(22), dp(18), dp(22), dp(14)) }
         val top = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         val title = column()
         title.addView(label("TOYOTA HYBRID", 10f, accent, true).apply { letterSpacing = .18f })
@@ -286,6 +290,8 @@ class MonitorActivity : Activity() {
         body = column().apply { setPadding(dp(18), dp(4), dp(18), dp(22)) }
         scroll.addView(body)
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        compact = CompactDashboard(this) { navigate("Conexiune") }.apply { visibility = View.GONE }
+        root.addView(compact, LinearLayout.LayoutParams(-1, 0, 1f))
         nav =
             LinearLayout(this).apply {
                 setPadding(dp(6), dp(7), dp(6), dp(9))
@@ -323,6 +329,15 @@ class MonitorActivity : Activity() {
 
     private fun render() {
         if (isFinishing || isDestroyed) return
+        val live = page == "Live"
+        header.visibility = if (live) View.GONE else View.VISIBLE
+        scroll.visibility = if (live) View.GONE else View.VISIBLE
+        compact.visibility = if (live) View.VISIBLE else View.GONE
+        if (live) {
+            if (navPage != page) renderNavigation()
+            renderCompact()
+            return
+        }
         val y = scroll.scrollY
         val attachedBody = body
         body = column()
@@ -394,7 +409,7 @@ class MonitorActivity : Activity() {
                 "Rapoarte", "Raport", "Emisii OBD" -> "Erori"
                 else -> page
             }
-        listOf("Acasă", "Consum", "Baterie", "Erori", "Conexiune").forEachIndexed { index, item ->
+        listOf("Acasă", "Live", "Consum", "Baterie", "Erori", "Conexiune").forEach { item ->
             val selected = active == item
             val tint = if (selected) accent else muted
             val destination =
@@ -406,11 +421,69 @@ class MonitorActivity : Activity() {
                     isClickable = true
                     isFocusable = true
                     setOnClickListener { navigate(item) }
-                    addView(NavIcon(this@MonitorActivity, index, tint), LinearLayout.LayoutParams(dp(24), dp(24)))
+                    val icon =
+                        when (item) {
+                            "Acasă" -> 0
+                            "Live" -> 5
+                            "Consum" -> 1
+                            "Baterie" -> 2
+                            "Erori" -> 3
+                            else -> 4
+                        }
+                    addView(NavIcon(this@MonitorActivity, icon, tint), LinearLayout.LayoutParams(dp(24), dp(24)))
                     addView(label(item, 10f, tint).apply { gravity = Gravity.CENTER })
                 }
             nav.addView(destination, LinearLayout.LayoutParams(0, -2, 1f))
         }
+    }
+
+    private fun renderCompact() {
+        val d = obd()
+        val battery = hv()
+        val trip = engine.sample.trip
+        val fuel = Consumption.from(d)
+        val average = trip.average
+        val kmPerLiter = average?.takeIf { it > 0 }?.let { 100 / it }
+        val pack = battery?.takeIf { it.blockVolts.size == 14 }?.packVolts()
+        val stopped =
+            trip.stoppedLiters.takeIf {
+                trip.stoppedCoveredSeconds > 0 || trip.stoppedSeconds == 0.0 && trip.coveredSeconds > 0
+            }
+        val distance = trip.distanceKm.takeIf { it > 0 || trip.stoppedSeconds > 0 || trip.seconds > 0 && d.speed != null }
+        val metrics =
+            listOf(
+                CompactMetric("Viteză", speed(d.speed), speedUnit()),
+                CompactMetric("Consum instant", f(fuel.per100(d.speed)), "l/100 km"),
+                CompactMetric("Consum mediu", f(average), "l/100 km · ${f(kmPerLiter)} km/l"),
+                CompactMetric("Consum pe oră", f(fuel.litersHour, 2), "l/h"),
+                CompactMetric("Baterie HV", f(battery?.soc), "% SOC · ${f(pack, 0)} V"),
+                CompactMetric("Turație motor", f(d.rpm, 0), "rpm"),
+                CompactMetric("Răcire motor", temp(d.coolant), tempUnit()),
+                CompactMetric("Curent HV", f(battery?.currentAmps, 1), "A · semn ECU"),
+                CompactMetric("Temperatură HV", temp(battery?.temps?.filter(Float::isFinite)?.maxOrNull()), tempUnit()),
+                CompactMetric("Diferență blocuri", f(battery?.takeIf { it.blockVolts.size == 14 }?.voltDiff(), 3), "V · max–min"),
+                CompactMetric("Baterie 12 V", f(d.voltage ?: battery?.aux12V, 2), "V"),
+                CompactMetric("Distanță", f(distance?.let { if (imperial) it / 1.609344 else it }, 2), if (imperial) "mile" else "km"),
+                CompactMetric("Combustibil total", f(trip.liters.takeIf { trip.coveredSeconds > 0 }, 3), "litri calculați"),
+                CompactMetric("La viteză 0", f(stopped, 3), "litri · călătoria continuă"),
+                CompactMetric("Durată călătorie", duration(trip.seconds), "h:min:sec"),
+            )
+        val state =
+            if (engine.connected) {
+                "● ${engine.adapter}"
+            } else if (engine.connecting) {
+                "Conectare în curs…"
+            } else {
+                "Neconectat · apasă OBD"
+            }
+        val source =
+            when (fuel.source) {
+                FuelSource.MAF -> "Consum estimat MAF"
+                FuelSource.ECU -> "Consum citit ECU"
+                FuelSource.ENGINE_STOPPED -> "Motor termic oprit"
+                FuelSource.UNAVAILABLE -> "Consum indisponibil"
+            }
+        compact.update(metrics, state, "$source · acoperire ${f(trip.coverage, 0)} % · SOH indisponibil")
     }
 
     private fun subtitle(): String =
@@ -515,10 +588,9 @@ class MonitorActivity : Activity() {
         if (!engine.connected) {
             val start = card("Pregătit pentru Prius-ul tău")
             start.addView(
-                label("Conectează adaptorul sau explorează interfața în Demo. Valorile fără răspuns sunt afișate cu —.", 13f, muted),
+                label("Conectează adaptorul pentru citiri reale. Valorile fără răspuns sunt afișate cu —.", 13f, muted),
             )
             action(start, "Conectează VIECAR", true) { navigate("Conexiune") }
-            action(start, "Explorează modul Demo") { engine.startDemo() }
         }
         note(
             "${engine.layout}\n" +
@@ -549,8 +621,28 @@ class MonitorActivity : Activity() {
         if (t.seconds > 0 && t.coverage < 99.5) hero.addView(label("Medie parțială · acoperire ${f(t.coverage, 0)} %", 11f, amber))
         val hourly = card("Consum pe oră și la opriri")
         metric(hourly, "Acum · inclusiv în mers", f(c.litersHour, 2), "l/h", accent)
-        metric(hourly, "Combustibil la viteză 0", f(t.stoppedLiters, 3), "litri")
+        // Stopped fuel: only show a litre figure when we actually had fuel-rate readings
+        // during the stopped interval. If coverage is zero, 0,000 l would be misleading.
+        val stoppedCov = t.stoppedCoverage // 0..100
+        val stoppedLabel =
+            when {
+                t.stoppedSeconds < 1 -> f(null) // no stops yet — show dash
+                stoppedCov < 0.5 -> "date lipsă" // no readings during any stop
+                else -> f(t.stoppedLiters, 3)
+            }
+        val stoppedUnit = if (t.stoppedSeconds < 1 || stoppedCov < 0.5) "" else "litri"
+        metric(hourly, "Combustibil la viteză 0", stoppedLabel, stoppedUnit)
         metric(hourly, "Timp la viteză 0", duration(t.stoppedSeconds))
+        if (t.stoppedSeconds >= 1 && stoppedCov < 99.5) {
+            val covText =
+                if (stoppedCov < 0.5) {
+                    "Nicio citire de consum nu a coincis cu opriri — totalul de 0 nu confirmă consumul zero."
+                } else {
+                    "Acoperire opriri: ${f(stoppedCov, 0)} % (${duration(t.stoppedCoveredSeconds)} din ${duration(t.stoppedSeconds)}). " +
+                        "Restul intervalului nu a putut fi calculat."
+                }
+            hourly.addView(label(covText, 12f, amber))
+        }
         hourly.addView(
             label("Viteză 0 include semafoarele și alte opriri. Nu înseamnă poziția P. Călătoria și media continuă.", 12f, muted),
         )
@@ -674,7 +766,7 @@ class MonitorActivity : Activity() {
                 ),
             )
         } else {
-            chart.addView(label("Tensiunile blocurilor sunt indisponibile. Conectează mașina sau pornește Demo.", 13f, muted))
+            chart.addView(label("Tensiunile blocurilor sunt indisponibile. Conectează mașina pentru citirea tensiunilor.", 13f, muted))
         }
         val temps = card("Temperaturi baterie")
         (0..2).forEach { metric(temps, "Senzor TB${it + 1}", temp(m?.temps?.getOrNull(it)), tempUnit()) }
@@ -731,7 +823,7 @@ class MonitorActivity : Activity() {
             if (observation.active) {
                 observation.stop()
             } else if (!engine.connected) {
-                toast("Conectează mașina sau pornește Demo")
+                toast("Conectează mașina")
                 return@action
             } else {
                 observation.start(engine.demo)
@@ -807,7 +899,7 @@ class MonitorActivity : Activity() {
             if (engine.connected) {
                 engine.scan()
             } else {
-                toast("Conectează adaptorul sau pornește Demo")
+                toast("Conectează adaptorul")
                 navigate("Conexiune")
             }
         }
@@ -867,10 +959,21 @@ class MonitorActivity : Activity() {
         gap(current, 6)
         current.addView(label(engine.adapter + "\n" + engine.layout, 12f, muted))
         if (engine.connected || engine.connecting) action(current, "Deconectează") { disconnectWithSummary("Deconectare manuală") }
+        val lastError = prefs.getString("last_connection_error", "").orEmpty()
+        if (lastError.isNotBlank()) {
+            val errors = card("Ultima eroare de conexiune")
+            errors.addView(label(time(prefs.getLong("last_connection_error_time", 0)), 12f, muted))
+            errors.addView(label(lastError, 13f, amber))
+            action(errors, "Copiază eroarea") {
+                val details = "Prius Monitor ${org.betsy.BuildConfig.BUILD_LABEL}\nAndroid ${Build.VERSION.RELEASE}\n$lastError"
+                getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Eroare OBD", details))
+                toast("Eroare copiată")
+            }
+        }
         val adapters = card("Adaptoare asociate")
         val bluetooth = getSystemService(BluetoothManager::class.java)?.adapter
         when {
-            bluetooth == null -> adapters.addView(label("Acest dispozitiv nu are Bluetooth. Modul Demo este disponibil.", 13f, muted))
+            bluetooth == null -> adapters.addView(label("Acest dispozitiv nu are Bluetooth.", 13f, muted))
             !hasBluetoothPermission() -> {
                 action(adapters, "Permite accesul Bluetooth", true) { requestBluetoothPermission() }
                 action(adapters, "Setările permisiunilor aplicației") {
@@ -948,14 +1051,6 @@ class MonitorActivity : Activity() {
                 muted,
             ),
         )
-        val demo = card("Explorează fără mașină")
-        demo.addView(
-            label("Modul demonstrativ afișează date simulate și un exemplu de eroare. Nu deschide nicio conexiune OBD.", 13f, muted),
-        )
-        action(demo, "Pornește modul Demo", true) {
-            engine.startDemo()
-            navigate("Acasă")
-        }
         note(
             "1. Introdu adaptorul în portul OBD și pregătește mașina pentru citire.\n2. Pentru Classic, asociază VIECAR în setările Bluetooth. Pentru BLE, folosește căutarea din aplicație.\n3. Închide Car Scanner și alte aplicații OBD înainte de conectare.\n\nMonitorizarea în fundal poate continua cu o notificare permanentă. Oprește conexiunea din aplicație sau din notificare.",
         )
@@ -1010,7 +1105,7 @@ class MonitorActivity : Activity() {
         units.addView(
             label(
                 "Monitorizarea în fundal folosește o notificare permanentă cu buton de oprire și poate crește consumul telefonului. " +
-                    "Setarea se aplică la următoarea conexiune. Modul Demo se oprește când părăsești aplicația.",
+                    "Setarea se aplică la următoarea conexiune.",
                 12f,
                 muted,
             ),
@@ -1187,7 +1282,7 @@ class MonitorActivity : Activity() {
             ),
         )
         action(controls, if (historyLoading) "Se încarcă…" else "Actualizează istoricul") { reloadTrips() }
-        if (tripRows.isEmpty() && !historyLoading) note("Nu există încă drumuri înregistrate. Conectează adaptorul sau explorează Demo.")
+        if (tripRows.isEmpty() && !historyLoading) note("Nu există încă drumuri înregistrate. Conectează adaptorul.")
         tripRows.forEach { r ->
             val c = card((if (r.demo) "DEMO · " else "") + time(r.started))
             c.addView(label(if (r.ended == null) "Sesiune activă" else r.reason, 11f, if (r.ended == null) accent else muted))
@@ -1236,8 +1331,34 @@ class MonitorActivity : Activity() {
         metric(summary, "Combustibil calculat", f(t.liters, 3), "litri")
         metric(summary, "Timp cu date", duration(t.seconds))
         metric(summary, "Acoperire consum", f(t.coverage, 0), "%")
-        metric(summary, "La viteză 0", f(t.stoppedLiters, 3), "litri")
+        run {
+            val stCov = t.stoppedCoverage
+            val stLabel =
+                when {
+                    t.stoppedSeconds < 1 -> f(null)
+                    stCov < 0.5 -> "date lipsă"
+                    else -> f(t.stoppedLiters, 3)
+                }
+            val stUnit = if (t.stoppedSeconds < 1 || stCov < 0.5) "" else "litri"
+            metric(summary, "La viteză 0", stLabel, stUnit)
+        }
         metric(summary, "Timp la viteză 0", duration(t.stoppedSeconds))
+        if (t.stoppedSeconds >= 1 && t.stoppedCoverage < 99.5) {
+            summary.addView(
+                label(
+                    if (t.stoppedCoverage < 0.5) {
+                        "Date de consum lipsă la opriri — 0 l/h neconfirmat."
+                    } else {
+                        "Acoperire opriri: ${f(
+                            t.stoppedCoverage,
+                            0,
+                        )} % (${duration(t.stoppedCoveredSeconds)} / ${duration(t.stoppedSeconds)})."
+                    },
+                    12f,
+                    amber,
+                ),
+            )
+        }
         metric(summary, "Eșantioane păstrate", "${r.count}")
         summary.addView(
             label(
@@ -1323,7 +1444,15 @@ class MonitorActivity : Activity() {
             appendLine(r.layout)
             appendLine("Distanță: ${f(t.distanceKm, 3)} km")
             appendLine("Combustibil: ${f(t.liters, 3)} l; mediu: ${f(t.average, 2)} l/100 km")
-            appendLine("La viteză 0: ${f(t.stoppedLiters, 3)} l în ${duration(t.stoppedSeconds)}")
+            val stTxt =
+                when {
+                    t.stoppedSeconds < 1 -> "nicio oprire"
+                    t.stoppedCoverage < 0.5 -> "date lipsă (acoperire opriri 0 %)"
+                    t.stoppedCoverage < 99.5 ->
+                        "${f(t.stoppedLiters, 3)} l (acoperire opriri ${f(t.stoppedCoverage, 0)} %)"
+                    else -> "${f(t.stoppedLiters, 3)} l"
+                }
+            appendLine("La viteză 0: $stTxt în ${duration(t.stoppedSeconds)}")
             appendLine("Acoperire consum: ${f(t.coverage, 1)} %; eșantioane: ${r.count}")
             appendLine(if (t.estimated) "Include estimări MAF." else "Debit ECU / motor termic oprit.")
             appendLine("Motiv încheiere: ${r.reason}")
