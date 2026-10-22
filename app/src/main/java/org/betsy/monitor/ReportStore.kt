@@ -62,6 +62,12 @@ class ReportStore(
                 appendLine()
             }
             r.inf.forEach { appendLine(it) }
+            FreezeFrames.decode(r.raw).forEach { frame ->
+                appendLine("CONDIȚII MEMORATE — ECU ${frame.ecu}, cadru ${frame.index}, DTC ${frame.code ?: "indisponibil"}")
+                frame.conditions.forEach { appendLine("${it.title}: ${it.value} ${it.unit}") }
+                appendLine("Snapshot memorat de ECU la eroare; nu este o citire live.")
+                appendLine()
+            }
             appendLine("NOTE / CITIRI INDISPONIBILE")
             r.notes.forEach { appendLine(it) }
             appendLine()

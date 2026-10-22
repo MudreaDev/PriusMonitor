@@ -1,6 +1,6 @@
 # Prius Monitor
 
-Aplicație Android în română pentru Toyota Prius 30 / ZVW30, bazată pe [BETSY](https://github.com/alrighdee/BETSY), cu adaptor ELM327 Bluetooth Classic SPP (inclusiv VIECAR cu acest profil).
+Aplicație Android în română pentru Toyota Prius 30 / ZVW30, bazată pe [BETSY](https://github.com/alrighdee/BETSY), cu adaptor ELM327 Bluetooth Classic SPP sau BLE UART acceptat.
 
 ## Funcții
 
@@ -8,8 +8,8 @@ Aplicație Android în română pentru Toyota Prius 30 / ZVW30, bazată pe [BETS
 - Consum instantaneu și mediu, l/h separat, litri și timp la viteză 0, distanță, durata călătoriei și sugestii explicate.
 - Baterie: 14 blocuri, tensiuni, diferență max–min, rezistențe interne, temperaturi, curent și putere calculată.
 - Sănătate / SOH: informații despre limitele măsurării și înregistrare pasivă a valorilor HV. Fără procent de sănătate inventat.
-- Diagnosticare motor și Toyota hibrid, explicații în română pentru codurile uzuale, rapoarte locale și export cu răspunsurile tehnice ECU.
-- Bluetooth cu permisiuni Android, limite de timp, deconectare și erori explicite.
+- Diagnosticare motor și Toyota hibrid, explicații în română pentru codurile uzuale, condiții memorate la eroare (freeze frame), monitoare emisii, rapoarte locale și export cu răspunsurile tehnice ECU.
+- Bluetooth Classic și căutare/conexiune BLE UART, permisiuni Android, limite de timp, deconectare și erori explicite.
 - Demo separat, etichetat permanent; setări pentru unități și intervalul de actualizare.
 
 ## Instalare
@@ -21,7 +21,7 @@ Aplicație Android în română pentru Toyota Prius 30 / ZVW30, bazată pe [BETS
 5. Deschide Conexiune în Prius Monitor, acordă accesul Bluetooth și selectează VIECAR.
 6. Fără mașină, folosește Pornește modul Demo. Datele Demo sunt simulate.
 
-Permisiunea Bluetooth trebuie acordată pe telefon la prima utilizare. Nu sunt necesare cont, internet, abonament sau Play Store pentru utilizare. Adaptoarele exclusiv BLE nu sunt acceptate de acest build.
+Permisiunea Bluetooth trebuie acordată pe telefon la prima utilizare. Nu sunt necesare cont, internet, abonament sau Play Store pentru utilizare. Pentru BLE, folosește căutarea de 15 secunde din Conexiune; sunt implementate profilurile FFF0/FFF1/FFF2, FFE0/FFE1, 18F0/2AF0/2AF1 și Nordic UART. Se verifică proprietățile caracteristicilor și inițializarea ELM327; nu se scrie în caracteristici arbitrare. BLE necesită validare pe adaptorul fizic. Android 8–11 cere acces Locație și localizarea activă pentru căutare; aplicația nu citește poziția GPS. Android 12+ cere Dispozitive din apropiere. Căutarea se oprește când părăsești ecranul/aplicația. Classic nu cere permisiunea Locație.
 
 ## Consum și călătorii
 

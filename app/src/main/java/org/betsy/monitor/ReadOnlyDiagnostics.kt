@@ -51,6 +51,8 @@ object ReadOnlyDiagnostics {
                     }
                 }
             }
+            progress("ECU motor · condiții memorate la eroare")
+            FreezeFrames.readEngine(elm, raw, notes)
             // The user selected a Prius 30 profile. Missing live telemetry must not hide a
             // readable hybrid fault; describe the assumption rather than claiming detection.
             val vehicle =

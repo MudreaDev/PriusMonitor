@@ -1,6 +1,5 @@
 package org.betsy.monitor
 
-import android.bluetooth.BluetoothDevice
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -25,7 +24,7 @@ class MonitorEngine {
         private set
     private val observers = linkedSetOf<() -> Unit>()
 
-    @Volatile private var transport: DeadlineBluetoothTransport? = null
+    @Volatile private var transport: ConnectableTransport? = null
     private var session: ElmSession? = null
     private var info: VehicleInfo? = null
     private var polling: ScheduledFuture<*>? = null
@@ -97,8 +96,8 @@ class MonitorEngine {
     }
 
     fun connect(
-        device: BluetoothDevice,
         name: String,
+        transportFactory: () -> ConnectableTransport,
     ) {
         disconnect("Pregătire conexiune")
         val id = generation
@@ -109,7 +108,7 @@ class MonitorEngine {
         worker.execute {
             try {
                 if (id != generation) return@execute
-                val link = DeadlineBluetoothTransport(device)
+                val link = transportFactory()
                 transport = link
                 if (id != generation) {
                     link.close()

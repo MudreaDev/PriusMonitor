@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -43,7 +44,9 @@ class MonitorActivity : Activity() {
     private lateinit var nav: LinearLayout
     private var page = "Acasă"
     private var loadedReport: ScanReport? = null
-    private var exportText = ""
+    private val pendingExports by lazy { PendingExport(this) }
+    private val bleDiscovery by lazy { BleDiscovery(this) { if (uiVisible && page == "Conexiune") refresh() } }
+    private var exportToken: String? = null
     private var documentPickerOpen = false
     private var touching = false
     private var uiVisible = true
@@ -101,11 +104,36 @@ class MonitorActivity : Activity() {
                 .show()
         }
         page = savedInstanceState?.getString("page") ?: "Acasă"
+        exportToken = savedInstanceState?.getString("exportToken")
+        pendingTripCsv = savedInstanceState?.getLong("csvTrip", -1L)?.takeIf { it >= 0 }
+        documentPickerOpen = savedInstanceState?.getBoolean("documentPickerOpen", false) ?: false
         render()
+        val savedY = savedInstanceState?.getInt("scrollY", 0) ?: 0
+        val tripId = savedInstanceState?.getLong("selectedTrip", -1L) ?: -1L
+        val reportTime = savedInstanceState?.getLong("loadedReport", -1L) ?: -1L
+        if (page == "Călătorie" && tripId >= 0) {
+            openTrip(tripId, savedY)
+        } else if (page == "Raport" && reportTime >= 0) {
+            app.query({ store.list().firstOrNull { it.name == "scan-$reportTime.json" }?.let { store.read(it) } }) { result ->
+                if (!isDestroyed && page == "Raport") {
+                    loadedReport = result.getOrNull()
+                    render()
+                    scroll.post { scroll.scrollTo(0, savedY) }
+                }
+            }
+        } else {
+            scroll.post { scroll.scrollTo(0, savedY) }
+        }
     }
 
     override fun onSaveInstanceState(out: Bundle) {
         out.putString("page", page)
+        out.putInt("scrollY", scroll.scrollY)
+        selectedTrip?.let { out.putLong("selectedTrip", it.id) }
+        loadedReport?.let { out.putLong("loadedReport", it.time) }
+        exportToken?.let { out.putString("exportToken", it) }
+        pendingTripCsv?.let { out.putLong("csvTrip", it) }
+        out.putBoolean("documentPickerOpen", documentPickerOpen)
         super.onSaveInstanceState(out)
     }
 
@@ -265,6 +293,7 @@ class MonitorActivity : Activity() {
     }
 
     private fun navigate(next: String) {
+        if (page == "Conexiune" && next != page) bleDiscovery.stop(false)
         page = next
         loadedReport = null
         scroll.scrollTo(0, 0)
@@ -735,6 +764,13 @@ class MonitorActivity : Activity() {
             c.addView(label(RomanianFaults.description(fault.code), 14f))
         }
         if (r.inf.isNotEmpty()) card("Detalii INF Toyota").addView(label(r.inf.joinToString("\n"), 13f, muted))
+        FreezeFrames.decode(r.raw).forEach { frame ->
+            val c = card("Condiții memorate · ECU ${frame.ecu} · cadru ${frame.index}")
+            c.addView(
+                label("La apariția erorii · ${frame.code ?: "DTC indisponibil"}\nSnapshot memorat de ECU, nu valori live.", 12f, amber),
+            )
+            frame.conditions.forEach { metric(c, it.title, f(it.value), it.unit) }
+        }
         if (r.notes.isNotEmpty()) {
             val c = card("Acoperirea scanării / citiri lipsă")
             c.addView(label("Unele mesaje tehnice ECU sunt păstrate în forma originală în raportul exportat.", 12f, muted))
@@ -783,17 +819,15 @@ class MonitorActivity : Activity() {
                 devices.forEach { device ->
                     val name = device.name ?: "Adaptor Bluetooth"
                     action(adapters, "$name\n${device.address}", name.contains("VIECAR", true) || name.contains("OBD", true)) {
-                        if (!engine.connecting) {
-                            if (Build.VERSION.SDK_INT >= 33 &&
-                                prefs.getBoolean("background_monitoring", true) &&
-                                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
-                                !prefs.getBoolean("notification_asked", false)
-                            ) {
-                                prefs.edit().putBoolean("notification_asked", true).apply()
-                                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 93)
-                            }
-                            app.connect(device, name)?.let { toast(it) }
-                            prefs.edit().putString("adapter", device.address).apply()
+                        if (device.type == BluetoothDevice.DEVICE_TYPE_DUAL) {
+                            AlertDialog
+                                .Builder(this)
+                                .setTitle("Tipul conexiunii pentru $name")
+                                .setItems(arrayOf("Bluetooth Classic SPP", "Bluetooth Low Energy (BLE)")) { _, index ->
+                                    connectDevice(device, name, index == 1)
+                                }.show()
+                        } else {
+                            connectDevice(device, name, device.type == BluetoothDevice.DEVICE_TYPE_LE)
                         }
                     }
                 }
@@ -801,6 +835,45 @@ class MonitorActivity : Activity() {
         }
         action(adapters, "Deschide setările Bluetooth") { startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }
         action(adapters, "Actualizează lista") { render() }
+        val ble = card("Adaptoare BLE din apropiere")
+        ble.addView(label(bleDiscovery.message, 13f, muted))
+        if (bleDiscovery.active) {
+            action(ble, "Oprește căutarea BLE") { bleDiscovery.stop() }
+        } else {
+            action(ble, "Caută adaptor BLE (15 secunde)") {
+                if (!hasBluetoothPermission()) {
+                    requestBluetoothPermission()
+                } else if (!hasBleScanPermission()) {
+                    requestBleScanPermission()
+                } else {
+                    bleDiscovery.start()
+                }
+            }
+        }
+        bleDiscovery.candidates.forEach { candidate ->
+            action(
+                ble,
+                "${candidate.name}\nBLE · ${candidate.device.address} · ${candidate.rssi} dBm",
+                BleDiscovery.looksLikeObd(candidate.name),
+            ) {
+                connectDevice(candidate.device, candidate.name, true)
+            }
+        }
+        ble.addView(
+            label(
+                "Selectează doar adaptorul tău OBD. Profiluri acceptate: FFF0, FFE0, 18F0 și Nordic UART. " +
+                    "Compatibilitatea necesită verificare pe adaptor. " +
+                    if (Build.VERSION.SDK_INT <
+                        31
+                    ) {
+                        "Android 8–11 cere permisiunea Locație și serviciile de localizare active pentru căutarea BLE. Aplicația nu citește poziția GPS."
+                    } else {
+                        "Căutarea folosește permisiunea Dispozitive din apropiere, fără localizare GPS."
+                    },
+                12f,
+                muted,
+            ),
+        )
         val demo = card("Explorează fără mașină")
         demo.addView(
             label("Modul demonstrativ afișează date simulate și un exemplu de eroare. Nu deschide nicio conexiune OBD.", 13f, muted),
@@ -810,7 +883,7 @@ class MonitorActivity : Activity() {
             navigate("Acasă")
         }
         note(
-            "1. Introdu adaptorul în portul OBD și pregătește mașina pentru citire.\n2. Asociază VIECAR cu telefonul (PIN-ul este cel indicat de adaptor).\n3. Închide Car Scanner și alte aplicații OBD înainte de conectare.\n\nAceastă versiune folosește Bluetooth Classic SPP. Adaptoarele exclusiv BLE nu sunt compatibile. Monitorizarea în fundal poate continua cu o notificare permanentă. Oprește conexiunea din aplicație sau din notificare.",
+            "1. Introdu adaptorul în portul OBD și pregătește mașina pentru citire.\n2. Pentru Classic, asociază VIECAR în setările Bluetooth. Pentru BLE, folosește căutarea din aplicație.\n3. Închide Car Scanner și alte aplicații OBD înainte de conectare.\n\nMonitorizarea în fundal poate continua cu o notificare permanentă. Oprește conexiunea din aplicație sau din notificare.",
         )
     }
 
@@ -907,7 +980,7 @@ class MonitorActivity : Activity() {
                 .Builder(this)
                 .setTitle("Prius Monitor 1.0")
                 .setMessage(
-                    "Pentru Toyota Prius 30, cu adaptor ELM327 Bluetooth Classic.\n\nBazat pe BETSY de alrighdee și colaboratori, licență MIT. Codul și protocolul original sunt păstrate în proiect.\n\nGen 3: implementare testată software, necesită verificare pe mașină.\n\nAplicația nu codifică ECU-uri, nu șterge erori și nu certifică sănătatea bateriei.",
+                    "Pentru Toyota Prius 30, cu adaptor ELM327 Bluetooth Classic sau BLE UART acceptat.\n\nBazat pe BETSY de alrighdee și colaboratori, licență MIT. Codul și protocolul original sunt păstrate în proiect.\n\nGen 3 și BLE: implementare testată software, necesită verificare pe mașină și adaptor.\n\nAplicația nu codifică ECU-uri, nu șterge erori și nu certifică sănătatea bateriei.",
                 ).setPositiveButton("Închide", null)
                 .show()
         }
@@ -1036,7 +1109,10 @@ class MonitorActivity : Activity() {
         }
     }
 
-    private fun openTrip(id: Long) {
+    private fun openTrip(
+        id: Long,
+        restoredY: Int = 0,
+    ) {
         app.query({ app.trips.get(id) to app.trips.samples(id) }) { result ->
             if (isDestroyed || isFinishing) return@query
             result
@@ -1048,6 +1124,7 @@ class MonitorActivity : Activity() {
                     selectedTrip = trip
                     selectedSamples = samples
                     navigate("Călătorie")
+                    scroll.post { scroll.scrollTo(0, restoredY) }
                 }.onFailure { toast("Datele călătoriei nu au putut fi citite") }
         }
     }
@@ -1074,8 +1151,7 @@ class MonitorActivity : Activity() {
             ),
         )
         action(summary, "Exportă toate eșantioanele CSV", true) {
-            export("", "prius-calatorie-${r.id}.csv", "text/csv")
-            pendingTripCsv = r.id
+            export("", "prius-calatorie-${r.id}.csv", "text/csv", r.id)
         }
         action(summary, "Exportă rezumatul în text") { export(recordedTripText(r), "prius-calatorie-${r.id}.txt", "text/plain") }
         action(summary, "Actualizează datele călătoriei") { openTrip(r.id) }
@@ -1160,6 +1236,52 @@ class MonitorActivity : Activity() {
     private fun hasBluetoothPermission() =
         Build.VERSION.SDK_INT < 31 || checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
 
+    private fun hasBleScanPermission() =
+        checkSelfPermission(
+            if (Build.VERSION.SDK_INT >=
+                31
+            ) {
+                Manifest.permission.BLUETOOTH_SCAN
+            } else {
+                Manifest.permission.ACCESS_FINE_LOCATION
+            },
+        ) ==
+            PackageManager.PERMISSION_GRANTED
+
+    private fun requestBleScanPermission() {
+        val permissions =
+            if (Build.VERSION.SDK_INT >= 31) {
+                arrayOf(Manifest.permission.BLUETOOTH_SCAN)
+            } else {
+                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+            }
+        requestPermissions(permissions, 94)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun connectDevice(
+        device: BluetoothDevice,
+        name: String,
+        ble: Boolean,
+    ) {
+        if (engine.connecting) return
+        bleDiscovery.stop(false)
+        if (Build.VERSION.SDK_INT >= 33 &&
+            prefs.getBoolean("background_monitoring", true) &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
+            !prefs.getBoolean("notification_asked", false)
+        ) {
+            prefs.edit().putBoolean("notification_asked", true).apply()
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 93)
+        }
+        app.connect(device, name, ble)?.let { toast(it) }
+        prefs
+            .edit()
+            .putString("adapter", device.address)
+            .putBoolean("adapter_ble", ble)
+            .apply()
+    }
+
     private fun requestBluetoothPermission() {
         if (Build.VERSION.SDK_INT >=
             31
@@ -1207,18 +1329,35 @@ class MonitorActivity : Activity() {
         text: String,
         name: String,
         mime: String,
+        csvTrip: Long? = null,
     ) {
-        exportText = text
-        pendingTripCsv = null
+        if (documentPickerOpen) return
+        val token =
+            try {
+                pendingExports.stage(text)
+            } catch (_: Exception) {
+                toast("Exportul nu a putut fi pregătit. Verifică spațiul liber.")
+                return
+            }
+        exportToken = token
+        pendingTripCsv = csvTrip
         documentPickerOpen = true
-        startActivityForResult(
-            Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-                addCategory(Intent.CATEGORY_OPENABLE)
-                type = mime
-                putExtra(Intent.EXTRA_TITLE, name)
-            },
-            92,
-        )
+        try {
+            startActivityForResult(
+                Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = mime
+                    putExtra(Intent.EXTRA_TITLE, name)
+                },
+                92,
+            )
+        } catch (_: Exception) {
+            documentPickerOpen = false
+            pendingTripCsv = null
+            exportToken = null
+            pendingExports.discard(token)
+            toast("Selectorul de fișiere nu este disponibil pe acest telefon.")
+        }
     }
 
     override fun onActivityResult(
@@ -1229,14 +1368,27 @@ class MonitorActivity : Activity() {
         super.onActivityResult(request, result, intent)
         if (request == 92) documentPickerOpen = false
         val csvTrip = if (request == 92) pendingTripCsv else null
+        val token = if (request == 92) exportToken else null
         if (request == 92) pendingTripCsv = null
+        if (request == 92) exportToken = null
         if (request == 92 && result == RESULT_OK) {
             intent?.data?.let { uri ->
-                val text = exportText
                 app.query({
-                    val stream = contentResolver.openOutputStream(uri) ?: error("Destinație indisponibilă")
-                    stream.bufferedWriter().use { writer ->
-                        if (csvTrip != null) app.trips.exportCsv(csvTrip, writer) else writer.write(text)
+                    try {
+                        val text =
+                            if (csvTrip ==
+                                null
+                            ) {
+                                pendingExports.read(token ?: error("Conținutul exportului nu mai este disponibil"))
+                            } else {
+                                null
+                            }
+                        val stream = contentResolver.openOutputStream(uri, "wt") ?: error("Destinație indisponibilă")
+                        stream.bufferedWriter().use { writer ->
+                            if (csvTrip != null) app.trips.exportCsv(csvTrip, writer) else writer.write(text!!)
+                        }
+                    } finally {
+                        token?.let { pendingExports.discard(it) }
                     }
                 }) { outcome ->
                     if (isDestroyed) return@query
@@ -1245,6 +1397,8 @@ class MonitorActivity : Activity() {
                         .onFailure { toast("Exportul a eșuat. Alege o altă destinație.") }
                 }
             }
+        } else if (request == 92) {
+            token?.let { pendingExports.discard(it) }
         }
     }
 
@@ -1282,6 +1436,7 @@ class MonitorActivity : Activity() {
     override fun onStop() {
         super.onStop()
         uiVisible = false
+        bleDiscovery.stop(false)
         // The document picker temporarily backgrounds this activity; preserve the trip text
         // before closing Bluetooth, then let the export complete on return.
         val canContinue = !engine.demo && app.backgroundRequested

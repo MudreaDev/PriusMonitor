@@ -46,6 +46,14 @@ class MonitorInstrumentation : Instrumentation() {
                 check(texts().any { it == "—" })
                 check(texts().contains("Prius Monitor"))
             }
+            step("Pending exports survive Activity ownership and reject invalid cache paths") {
+                val first = PendingExport(targetContext)
+                val token = first.stage("Test românesc · conținut păstrat")
+                check(PendingExport(targetContext).read(token) == "Test românesc · conținut păstrat")
+                check(runCatching { first.read("../files/private") }.isFailure)
+                first.discard(token)
+                check(runCatching { first.read(token) }.isFailure)
+            }
             step("Trip journal persists nullable samples, exports CSV and recovers interrupted trips") {
                 val name = "monitor-check-${System.currentTimeMillis()}.db"
                 val journal = TripStore(targetContext, name)
@@ -80,6 +88,44 @@ class MonitorInstrumentation : Instrumentation() {
             step("Connection screen offers a separate Demo") {
                 click("Conexiune")
                 check(texts().any { it.contains("Pornește modul Demo") })
+                check(texts().contains("Caută adaptor BLE (15 secunde)"))
+            }
+            step("Real engine path uses transport readings and never falls back to Demo") {
+                val replay =
+                    org.betsy.transport.ReplayTransport(
+                        mapOf(
+                            "ATZ" to "ELM327 v1.5",
+                            "0100" to "410000100000",
+                            "010C" to "410C0FA0",
+                        ),
+                    )
+                val engine = MonitorEngine()
+                try {
+                    runOnMainSync {
+                        engine.connect("Test transport") {
+                            object : ConnectableTransport {
+                                override var readTimeoutMs = 2500
+
+                                override fun connect() {}
+
+                                override suspend fun send(cmd: String) = replay.send(cmd)
+
+                                override fun close() {
+                                    replay.close()
+                                }
+                            }
+                        }
+                    }
+                    waitUntil { engine.connected && engine.sample.time > 0 }
+                    check(!engine.demo)
+                    check(engine.sample.obd.rpm == 1000f)
+                    check(engine.sample.obd.speed == null)
+                    check(engine.sample.battery == null)
+                    runOnMainSync { engine.disconnect() }
+                    check(engine.sample.time == 0L)
+                } finally {
+                    runOnMainSync { engine.destroy() }
+                }
             }
             step("Demo produces clearly labelled samples") {
                 click("Pornește modul Demo")
@@ -191,6 +237,17 @@ class MonitorInstrumentation : Instrumentation() {
                 waitUntil { texts().contains("CĂLĂTORIE DEMO") }
                 check(texts().contains("Exportă toate eșantioanele CSV"))
                 screenshot("calatorie")
+            }
+            step("Activity recreation restores the selected historical journey") {
+                val monitor = addMonitor(MonitorActivity::class.java.name, null, false)
+                try {
+                    runOnMainSync { activity.recreate() }
+                    activity = waitForMonitorWithTimeout(monitor, 10000) ?: error("Activity did not recreate")
+                    waitUntil { texts().contains("CĂLĂTORIE DEMO") }
+                    check(texts().contains("Exportă toate eșantioanele CSV"))
+                } finally {
+                    removeMonitor(monitor)
+                }
             }
             step("Connected-device foreground service starts and releases itself when idle") {
                 if (Build.VERSION.SDK_INT >= 31) {

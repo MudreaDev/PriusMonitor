@@ -27,7 +27,12 @@ class ReadOnlyDiagnosticsTest {
         assertTrue(result.faults.any { it.code == "P0A80" && it.source.contains("7E2") })
         assertTrue(result.notes.any { it.contains("nu a confirmat profilul") })
         assertTrue(replay.sent.contains("ATSH7E2"))
-        assertTrue(replay.sent.all { it.startsWith("AT") || it in setOf("03", "07", "0A", "13B0", "21C6", "21C7", "21C8", "21C9", "21CA") })
+        assertTrue(
+            replay.sent.all {
+                it.startsWith("AT") ||
+                    it in setOf("03", "07", "0A", "020000", "13B0", "21C6", "21C7", "21C8", "21C9", "21CA")
+            },
+        )
     }
 
     @Test fun rejectedOptionalServiceIsReportedAndDoesNotDropOtherCodes() {

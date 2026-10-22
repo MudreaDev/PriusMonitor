@@ -41,6 +41,7 @@ class MonitorApplication : Application() {
     fun connect(
         device: BluetoothDevice,
         name: String,
+        ble: Boolean = false,
     ): String? {
         val background = getSharedPreferences("prius-monitor", MODE_PRIVATE).getBoolean("background_monitoring", true)
         backgroundRequested = background
@@ -53,7 +54,9 @@ class MonitorApplication : Application() {
                 warning = "Monitorizarea în fundal nu a putut porni. Păstrează aplicația deschisă."
             }
         }
-        engine.connect(device, name)
+        engine.connect("$name · ${if (ble) "BLE" else "SPP"}") {
+            if (ble) BleElmTransport(this, device) else DeadlineBluetoothTransport(device)
+        }
         return warning
     }
 

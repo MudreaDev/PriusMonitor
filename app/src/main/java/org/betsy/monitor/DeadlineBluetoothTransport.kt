@@ -3,7 +3,6 @@ package org.betsy.monitor
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothSocket
-import org.betsy.transport.ElmTransport
 import org.betsy.transport.TransportException
 import java.util.UUID
 import java.util.concurrent.Executors
@@ -13,13 +12,13 @@ import java.util.concurrent.TimeUnit
 @SuppressLint("MissingPermission")
 class DeadlineBluetoothTransport(
     device: BluetoothDevice,
-) : ElmTransport {
+) : ConnectableTransport {
     private val socket: BluetoothSocket = device.createRfcommSocketToServiceRecord(UUID.fromString("00001101-0000-1000-8000-00805F9B34FB"))
 
     @Volatile private var closed = false
     override var readTimeoutMs = 2500
 
-    fun connect() {
+    override fun connect() {
         val watchdog = WATCHDOG.schedule({ close() }, 18, TimeUnit.SECONDS)
         try {
             socket.connect()
