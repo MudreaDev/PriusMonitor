@@ -68,3 +68,5 @@ GitHub Actions produce artifactul PriusMonitor-debug-apk după verificări. APK-
 ## Licență
 
 BETSY: licență MIT; LICENSE și NOTICE sunt păstrate. Documentația originală: [README-BETSY.md](README-BETSY.md), [protocol](docs/PROTOCOL.md). Prius Monitor nu este afiliat oficial cu Toyota.
+
+Observația pasivă păstrează min/max pentru fiecare bloc, contextul diferenței maxime și curentul înregistrat. Fluxul absolut de sarcină (Ah) și energie (kWh) este aproximat prin integrare pe timpul monoton al telefonului, numai între citiri valide la cel mult 15 secunde. Schimbarea sensului între două citiri este tratată explicit. Ambele sensuri se cumulează în modul: nu sunt consum net, capacitate sau SOH. Documentația de bază are mențiuni neuniforme despre polaritatea curentului; interfața păstrează semnul numeric și cere validarea sensului pe mașină, fără etichete neconfirmate de încărcare/descărcare.

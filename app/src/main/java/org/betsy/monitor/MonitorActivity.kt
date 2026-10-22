@@ -654,10 +654,13 @@ class MonitorActivity : Activity() {
         )
         gap(overview)
         metric(overview, "Tensiune totală blocuri", f(m?.takeIf { it.blockVolts.isNotEmpty() }?.packVolts(), 2), "V")
-        metric(overview, "Curent (+ descărcare)", f(m?.currentAmps, 2), "A")
+        metric(overview, "Curent baterie · semn ECU", f(m?.currentAmps, 2), "A")
         val power = m?.takeIf { it.blockVolts.isNotEmpty() && it.currentAmps.isFinite() }?.let { it.packVolts() * it.currentAmps / 1000 }
-        metric(overview, "Putere calculată (+ ieșire)", f(power, 2), "kW")
+        metric(overview, "Putere calculată · semn ECU", f(power, 2), "kW")
         metric(overview, "Baterie auxiliară · ECU HV", f(m?.aux12V, 2), "V")
+        overview.addView(
+            label("Semnul curentului este păstrat din protocol. Sensul încărcare/descărcare necesită validare pe mașină.", 11f, muted),
+        )
         action(overview, "Sănătate baterie / SOH") { navigate("Sănătate baterie") }
         val chart = card("Echilibrul celor 14 blocuri")
         if (m?.blockVolts?.isNotEmpty() == true) {
@@ -712,6 +715,16 @@ class MonitorActivity : Activity() {
         metric(health, "Temperatură maximă observată", temp(observation.hottest), tempUnit())
         metric(health, "SOC observat min / max", "${f(observation.minSoc)} / ${f(observation.maxSoc)}", "%")
         metric(health, "Curent maxim în modul", f(observation.maxAbsCurrent), "A")
+        metric(health, "Flux electric total |I|", f(observation.absoluteAh, 3), "Ah")
+        metric(health, "Energie totală tranzitată |P|", f(observation.absoluteKwh, 4), "kWh")
+        metric(health, "Timp cu date pentru energie", duration(observation.powerCoveredSeconds))
+        health.addView(
+            label(
+                "Valorile cumulează ambele sensuri în modul, prin integrare aproximativă între citiri. Nu reprezintă consum net, capacitate sau SOH.",
+                12f,
+                muted,
+            ),
+        )
         if (observation.count > 0 && observation.demo) health.addView(label("Observație DEMO · date simulate", 12f, amber))
         action(health, if (observation.active) "Oprește observația bateriei" else "Începe observația bateriei", true) {
             if (observation.active) {
@@ -739,6 +752,36 @@ class MonitorActivity : Activity() {
                 muted,
             ),
         )
+        if (observation.count > 0) {
+            val ranges = card("Tensiuni minime și maxime observate")
+            observation.maxDeltaRow?.let { row ->
+                val context = card("Contextul diferenței maxime")
+                context.addView(label(time(row.timestamp), 12f, muted))
+                metric(context, "Diferență simultană între blocuri", f(row.delta, 3), "V")
+                metric(context, "SOC în acel moment", f(row.soc), "%")
+                metric(context, "Curent în acel moment", f(row.current, 2), "A")
+            }
+            observation.blockRanges.forEach { metric(ranges, "Bloc %02d".format(it.index), "${f(it.min, 3)} – ${f(it.max, 3)}", "V") }
+            ranges.addView(
+                label(
+                    "Extreme observate la momente diferite. Nu sunt diferențe măsurate simultan și nu identifică singure un bloc defect.",
+                    12f,
+                    muted,
+                ),
+            )
+            val currents = card("Curentul în timpul observației")
+            currents.addView(
+                LineChart(
+                    this,
+                    observation.recent().map {
+                        it.current
+                    },
+                    accent,
+                    "A · semn păstrat din ECU · ultimele 180 de eșantioane",
+                ),
+                LinearLayout.LayoutParams(-1, dp(160)),
+            )
+        }
     }
 
     private fun diagnostics() {

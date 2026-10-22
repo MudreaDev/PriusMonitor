@@ -97,31 +97,11 @@ class VehicleReader(
             }
         }
 
-        fun get(pid: String): Float? = values[pid]?.takeIf { clockMs() - it.second < 15000 }?.first
-        val d =
-            ObdData(
-                get("0D"),
-                get("0C"),
-                get("05"),
-                get("0F"),
-                get("46"),
-                get("04"),
-                get("11"),
-                get("10"),
-                get("42"),
-                get("2F"),
-                get("5E"),
-                get("1F"),
-                get("06"),
-                get("07"),
-                get("0E"),
-                get("0B"),
-                readiness = readiness?.takeIf { clockMs() - it.second < 15000 }?.first,
-            )
         val errors = mutableListOf<String>()
         val battery =
             info?.let { vehicle ->
                 val m = emptyBattery()
+                val readAt = mutableMapOf<String, Long>()
                 elm.withEcu(if (vehicle.model == VehicleModel.GEN3) "7E2" else "7E3") {
                     suspend fun read(
                         cmd: String,
@@ -141,6 +121,7 @@ class VehicleReader(
                                 true
                             } == true
                         if (success) {
+                            readAt[cmd] = clockMs()
                             hvUnavailableUntil.remove(cmd)
                             m.soc = candidate.soc
                             m.currentAmps = candidate.currentAmps
@@ -168,10 +149,72 @@ class VehicleReader(
                         read("21D0", Gen2Decoder::decodeD0)
                     }
                 }
+                readAt.forEach { (cmd, at) ->
+                    if (clockMs() - at >= 15000) {
+                        clearExpiredGroup(m, cmd)
+                        errors += "$cmd : citire expirată în timpul ciclului OBD"
+                    }
+                }
                 m
             }
+
+        // Hybrid reads can be slow. Check age at publication, after all requests completed.
+        fun get(pid: String): Float? = values[pid]?.takeIf { clockMs() - it.second < 15000 }?.first
+        val d =
+            ObdData(
+                get("0D"),
+                get("0C"),
+                get("05"),
+                get("0F"),
+                get("46"),
+                get("04"),
+                get("11"),
+                get("10"),
+                get("42"),
+                get("2F"),
+                get("5E"),
+                get("1F"),
+                get("06"),
+                get("07"),
+                get("0E"),
+                get("0B"),
+                readiness = readiness?.takeIf { clockMs() - it.second < 15000 }?.first,
+            )
         tick++
         return Triple(d, battery, errors)
+    }
+
+    private fun clearExpiredGroup(
+        m: BatteryModel,
+        cmd: String,
+    ) {
+        when (cmd) {
+            "2181" -> {
+                m.blockVolts = emptyList()
+                m.aux12V = Float.NaN
+            }
+            "2101" -> m.soc = Float.NaN
+            "2198" -> {
+                m.currentAmps = Float.NaN
+                m.maxChargeHp = Float.NaN
+                m.maxDischargeHp = Float.NaN
+                m.deltaSoc = Float.NaN
+            }
+            "2187" -> m.temps = emptyList()
+            "2195", "21D0" -> m.internalResistance = emptyList()
+            "21CE" -> {
+                m.soc = Float.NaN
+                m.currentAmps = Float.NaN
+                m.blockVolts = emptyList()
+            }
+            "21CF" -> {
+                m.aux12V = Float.NaN
+                m.maxChargeHp = Float.NaN
+                m.maxDischargeHp = Float.NaN
+                m.deltaSoc = Float.NaN
+                m.temps = emptyList()
+            }
+        }
     }
 
     private suspend fun <T> optional(block: suspend () -> T): T? =

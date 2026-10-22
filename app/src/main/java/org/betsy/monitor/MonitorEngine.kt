@@ -87,7 +87,7 @@ class MonitorEngine {
         main.post {
             if (id == generation) {
                 sample = next
-                observation.add(next.time, next.battery)
+                observation.add(next.time, next.battery, SystemClock.elapsedRealtime())
                 history.addLast(next)
                 while (history.size > 180) history.removeFirst()
                 changed()

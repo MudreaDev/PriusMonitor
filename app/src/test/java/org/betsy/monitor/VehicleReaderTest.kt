@@ -15,6 +15,38 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VehicleReaderTest {
+    @Test fun slowHybridCycleCannotRepublishOldEngineOrBatteryFieldsAsFresh() {
+        val replay = ReplayTransport(script())
+        var now = 1000L
+        var slow = false
+        val link =
+            object : ElmTransport {
+                override var readTimeoutMs = 2500
+
+                override suspend fun send(cmd: String): String {
+                    val response = replay.send(cmd)
+                    if (slow && cmd.startsWith("21")) now += 4000
+                    return response
+                }
+
+                override fun close() {
+                    replay.close()
+                }
+            }
+        val reader = VehicleReader(ElmSession(link)) { now }
+        awaitBlocking { reader.initialize() }
+        slow = true
+        val result = awaitBlocking { reader.read() }
+        assertNull(result.first.speed)
+        assertNull(result.first.rpm)
+        assertNull(result.first.readiness)
+        assertTrue(result.second!!.blockVolts.isEmpty())
+        assertTrue(result.second!!.aux12V.isNaN())
+        assertTrue(result.second!!.soc.isFinite())
+        assertEquals(14, result.second!!.internalResistance.size)
+        assertTrue(result.third.any { it.contains("2181") && it.contains("expirată") })
+    }
+
     private fun script() =
         mutableMapOf(
             "ATZ" to "ELM327 v1.5",

@@ -52,7 +52,7 @@ class LineChart(
             return
         }
         val min = minOf(0f, finite.min())
-        val high = max(min + 1, finite.max() * 1.1f)
+        val high = max(min + 1, maxOf(0f, finite.max()) * 1.1f)
         val path = Path()
         var started = false
         values.forEachIndexed { i, value ->
