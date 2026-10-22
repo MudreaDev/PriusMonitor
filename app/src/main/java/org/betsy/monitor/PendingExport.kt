@@ -24,6 +24,17 @@ class PendingExport(
 
     fun read(token: String): String = file(token).readText()
 
+    fun stageFile(source: File): String {
+        val token = stage("")
+        try {
+            source.inputStream().use { input -> file(token).outputStream().use { output -> input.copyTo(output) } }
+            return token
+        } catch (e: Exception) {
+            discard(token)
+            throw e
+        }
+    }
+
     fun discard(token: String) {
         file(token).delete()
     }

@@ -51,6 +51,7 @@ class MonitorActivity : Activity() {
     private val bleDiscovery by lazy { BleDiscovery(this) { if (uiVisible && page == "Conexiune") refresh() } }
     private var exportToken: String? = null
     private var documentPickerOpen = false
+    private var exportPreparing = false
     private var touching = false
     private var uiVisible = true
     private var renderPending = false
@@ -1067,6 +1068,26 @@ class MonitorActivity : Activity() {
                 .setPositiveButton("Închide", null)
                 .show()
         }
+        val trace = card("Jurnal tehnic ELM")
+        action(trace, "Înregistrare tehnică: ${if (prefs.getBoolean("technical_capture", false)) "pornită" else "oprită"}") {
+            prefs.edit().putBoolean("technical_capture", !prefs.getBoolean("technical_capture", false)).apply()
+            render()
+        }
+        trace.addView(
+            label(
+                "Opțional, pentru verificarea adaptorului și a citirilor lipsă. " +
+                    "Păstrează local comenzile și răspunsurile ELM, fără trimitere automată. " +
+                    "Se aplică la următoarea conexiune reală. Se păstrează cel mult ultimele 10 sesiuni, maximum 4 MB fiecare. Un export în timpul conexiunii conține datele disponibile la acel moment.",
+                12f,
+                muted,
+            ),
+        )
+        if (app.captures.lastError.isNotBlank()) trace.addView(label(app.captures.lastError, 12f, amber))
+        app.captures.list().forEach { file ->
+            action(trace, "Exportă ${file.name}\n${f(file.length() / 1024.0, 1)} KB") {
+                exportFile(file, "prius-${file.name}")
+            }
+        }
     }
 
     private fun sensorsPage() {
@@ -1406,7 +1427,7 @@ class MonitorActivity : Activity() {
         mime: String,
         csvTrip: Long? = null,
     ) {
-        if (documentPickerOpen) return
+        if (documentPickerOpen || exportPreparing) return
         val token =
             try {
                 pendingExports.stage(text)
@@ -1414,6 +1435,34 @@ class MonitorActivity : Activity() {
                 toast("Exportul nu a putut fi pregătit. Verifică spațiul liber.")
                 return
             }
+        launchPreparedExport(token, name, mime, csvTrip)
+    }
+
+    private fun exportFile(
+        file: java.io.File,
+        name: String,
+    ) {
+        if (documentPickerOpen || exportPreparing) return
+        exportPreparing = true
+        toast("Pregătesc exportul jurnalului…")
+        app.query({ pendingExports.stageFile(file) }) { result ->
+            exportPreparing = false
+            if (isDestroyed || isFinishing || !uiVisible) {
+                result.getOrNull()?.let { pendingExports.discard(it) }
+                return@query
+            }
+            result
+                .onSuccess { launchPreparedExport(it, name, "text/plain") }
+                .onFailure { toast("Jurnalul nu a putut fi pregătit pentru export") }
+        }
+    }
+
+    private fun launchPreparedExport(
+        token: String,
+        name: String,
+        mime: String,
+        csvTrip: Long? = null,
+    ) {
         exportToken = token
         pendingTripCsv = csvTrip
         documentPickerOpen = true
@@ -1446,7 +1495,7 @@ class MonitorActivity : Activity() {
         val token = if (request == 92) exportToken else null
         if (request == 92) pendingTripCsv = null
         if (request == 92) exportToken = null
-        if (request == 92 && result == RESULT_OK) {
+        if (request == 92 && result == RESULT_OK && intent?.data != null) {
             intent?.data?.let { uri ->
                 app.query({
                     try {

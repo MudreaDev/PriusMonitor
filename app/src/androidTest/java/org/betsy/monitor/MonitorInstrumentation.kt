@@ -53,6 +53,15 @@ class MonitorInstrumentation : Instrumentation() {
                 check(runCatching { first.read("../files/private") }.isFailure)
                 first.discard(token)
                 check(runCatching { first.read(token) }.isFailure)
+                val source = File(targetContext.cacheDir, "source-capture-check.log").apply { writeText("TX 010D\nRX 410D32\n") }
+                try {
+                    val staged = first.stageFile(source)
+                    source.writeText("Changed after snapshot")
+                    check(first.read(staged) == "TX 010D\nRX 410D32\n")
+                    first.discard(staged)
+                } finally {
+                    source.delete()
+                }
             }
             step("Trip journal persists nullable samples, exports CSV and recovers interrupted trips") {
                 val name = "monitor-check-${System.currentTimeMillis()}.db"
@@ -236,6 +245,7 @@ class MonitorInstrumentation : Instrumentation() {
                 check(targetContext.getSharedPreferences("prius-monitor", 0).getBoolean("fahrenheit", false))
                 check(texts().any { it == "Temperatură: °F" })
                 clickPrefix("Temperatură:")
+                check(texts().contains("Înregistrare tehnică: oprită"))
             }
             step("Disconnect removes simulated readings") {
                 click("Conexiune")

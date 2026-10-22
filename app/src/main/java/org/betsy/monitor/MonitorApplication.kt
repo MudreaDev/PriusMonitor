@@ -10,6 +10,7 @@ import java.util.concurrent.Executors
 /** The process owns the session and the journal; an Activity is only a view of them. */
 class MonitorApplication : Application() {
     val engine = MonitorEngine()
+    val captures by lazy { CaptureStore(this) }
     lateinit var trips: TripStore
         private set
     private val io = Executors.newSingleThreadExecutor()
@@ -55,7 +56,14 @@ class MonitorApplication : Application() {
             }
         }
         engine.connect("$name · ${if (ble) "BLE" else "SPP"}") {
-            if (ble) BleElmTransport(this, device) else DeadlineBluetoothTransport(device)
+            val link = if (ble) BleElmTransport(this, device) else DeadlineBluetoothTransport(device)
+            val capture =
+                if (getSharedPreferences("prius-monitor", MODE_PRIVATE).getBoolean("technical_capture", false)) {
+                    captures.start(if (ble) "BLE" else "SPP")
+                } else {
+                    null
+                }
+            if (capture == null) link else RecordingTransport(link, capture)
         }
         return warning
     }
