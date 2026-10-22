@@ -109,10 +109,17 @@ class BleElmTransport(
     private fun await(
         kind: String,
         timeoutMs: Long,
+        allowLegacyCccd: Boolean = false,
     ) {
         val event =
             events.poll(timeoutMs.coerceAtLeast(1), TimeUnit.MILLISECONDS)
                 ?: throw TransportException("Timp depășit la etapa BLE: $kind")
+        if (event.kind == kind && allowLegacyCccd && BleNotificationPolicy.canVerifyWithoutCccd(event.status)) {
+            // Some UART clones reject the CCCD write but already emit notifications.
+            // Local routing is enabled; ATZ/configure must still succeed before connecting.
+            profileLabel += " · CCCD compatibil"
+            return
+        }
         if (event.kind != kind || event.status != BluetoothGatt.GATT_SUCCESS) {
             throw TransportException(event.detail.ifBlank { "Etapa BLE $kind a eșuat (cod ${event.status})" })
         }
@@ -178,7 +185,7 @@ class BleElmTransport(
                     link.writeDescriptor(descriptor)
                 }
             if (!started) throw TransportException("Activarea notificărilor BLE a fost refuzată")
-            await("descriptor", 6000)
+            await("descriptor", 6000, allowLegacyCccd = true)
         } catch (e: Exception) {
             close()
             throw e
@@ -195,7 +202,7 @@ class BleElmTransport(
             TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()).takeIf { it > 0 }
                 ?: throw TransportException("Adaptorul BLE nu a răspuns la $cmd")
         try {
-            inbox.begin()
+            inbox.begin(cmd)
             val type =
                 if (characteristic.properties and BluetoothGattCharacteristic.PROPERTY_WRITE != 0) {
                     BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT

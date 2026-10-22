@@ -9,28 +9,30 @@ class ElmReplyInbox(
     private val maxChars: Int = 32768,
 ) {
     private val completed = ArrayBlockingQueue<Result<String>>(1)
-    private val buffer = StringBuilder()
+    private var collector = ElmResponseCollector("", maxChars)
     private var active = false
     private var failure: String? = null
 
-    @Synchronized fun begin() {
+    @Synchronized fun begin(command: String = "") {
         failure?.let { throw TransportException(it) }
         check(!active && completed.isEmpty()) { "Cerere OBD suprapusă" }
-        buffer.setLength(0)
+        collector = ElmResponseCollector(command, maxChars)
         active = true
     }
 
     @Synchronized fun receive(bytes: ByteArray) {
         if (!active || failure != null) return
         for (byte in bytes) {
-            if (byte.toInt() == '>'.code) {
+            val reply =
+                try {
+                    collector.receive(byte.toInt() and 255)
+                } catch (e: TransportException) {
+                    fail(e.message ?: "Răspuns BLE invalid")
+                    return
+                }
+            if (reply != null) {
                 active = false
-                completed.offer(Result.success(buffer.toString()))
-                return
-            }
-            buffer.append((byte.toInt() and 255).toChar())
-            if (buffer.length > maxChars) {
-                fail("Răspuns BLE prea lung")
+                completed.offer(Result.success(reply))
                 return
             }
         }

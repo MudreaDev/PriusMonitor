@@ -23,6 +23,14 @@ Aplicație Android în română pentru Toyota Prius 30 / ZVW30, bazată pe [BETS
 
 Permisiunea Bluetooth trebuie acordată pe telefon la prima utilizare. Nu sunt necesare cont, internet, abonament sau Play Store pentru utilizare. Pentru BLE, folosește căutarea de 15 secunde din Conexiune; sunt implementate profilurile FFF0/FFF1/FFF2, FFE0/FFE1, 18F0/2AF0/2AF1 și Nordic UART. Se verifică proprietățile caracteristicilor și inițializarea ELM327; nu se scrie în caracteristici arbitrare. BLE necesită validare pe adaptorul fizic. Android 8–11 cere acces Locație și localizarea activă pentru căutare; aplicația nu citește poziția GPS. Android 12+ cere Dispozitive din apropiere. Căutarea se oprește când părăsești ecranul/aplicația. Classic nu cere permisiunea Locație.
 
+## Depanare VIECAR
+
+Dacă inițializarea ATZ / ATE0 primește un răspuns hexazecimal de la ECU, noua citire ignoră acele cadre vechi și așteaptă răspunsul real la comanda de configurare. Legătura Classic trimite întâi un spațiu pentru a întrerupe o citire anterioară și așteaptă 300 ms fără trafic; nu repetă ultima comandă necunoscută printr-un Enter. Timpul și volumul datelor de sincronizare sunt limitate.
+
+Închide complet Car Scanner și celelalte aplicații OBD, scoate și reintrodu adaptorul, apoi încearcă Bluetooth Classic SPP. Dacă eșuează, copiază eroarea din Conexiune. Un răspuns nepotrivit nu este tratat drept conectare reușită.
+
+Pentru profilurile BLE UART cunoscute, refuzul CCCD cu status ATT 3 / 4 / 6 permite verificarea notificărilor deja active, după activarea rutării locale. Conectarea nu este confirmată înainte de răspunsurile ELM327 și inițializarea citirii ECU. Erorile de autentificare, criptare, deconectare sau expirare a timpului nu folosesc această excepție. Compatibilitatea necesită test fizic.
+
 ## Consum și călătorii
 
 Debitul este citit direct din PID 015E dacă ECU îl oferă. Altfel, cu MAF și turație disponibile, se estimează pentru benzină: l/h = MAF[g/s] × 3600 / (14,7 × 745). Estimarea este etichetată; nu identifică sigur tăierea injecției și poate diferi de bord. La turație citită de 0 rpm, consumul de benzină este considerat 0. Energia electrică nu este inclusă.

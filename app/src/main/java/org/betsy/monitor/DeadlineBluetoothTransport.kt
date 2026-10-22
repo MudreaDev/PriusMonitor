@@ -28,7 +28,17 @@ class DeadlineBluetoothTransport(
     override var readTimeoutMs = 2500
 
     override fun connect() {
-        socket = connector.connect()
+        val active = connector.connect()
+        socket = active
+        val watchdog = WATCHDOG.schedule({ close() }, 2500, TimeUnit.MILLISECONDS)
+        try {
+            ElmStartupDrain.run(active.inputStream, active.outputStream, { closed })
+        } catch (e: Exception) {
+            close()
+            throw e
+        } finally {
+            watchdog.cancel(false)
+        }
     }
 
     override suspend fun send(cmd: String): String {
@@ -42,20 +52,22 @@ class DeadlineBluetoothTransport(
         try {
             output.write((cmd + "\r").toByteArray(Charsets.US_ASCII))
             output.flush()
-            val reply = StringBuilder()
+            val reply = ElmResponseCollector(cmd)
             while (!closed && System.nanoTime() < deadline) {
                 if (input.available() > 0) {
                     val b = input.read()
                     if (b < 0) throw TransportException("Adaptorul a închis conexiunea")
-                    if (b == '>'.code) return reply.toString()
-                    reply.append(b.toChar())
-                    if (reply.length > 32768) throw TransportException("Răspuns prea lung de la adaptor")
+                    reply.receive(b)?.let { return it }
                 } else {
                     Thread.sleep(8)
                 }
             }
             close()
-            throw TransportException("Adaptorul nu a răspuns la $cmd. Reconectează-l.")
+            throw TransportException(
+                "Adaptorul nu a oferit răspunsul așteptat la $cmd. " +
+                    "Închide Car Scanner și celelalte aplicații OBD, scoate și reintrodu VIECAR, apoi reconectează-l. " +
+                    "Ultimul răspuns ignorat: ${reply.lastIgnoredFrame.ifBlank { "niciunul" }}",
+            )
         } finally {
             watchdog.cancel(false)
         }
