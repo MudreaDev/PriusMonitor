@@ -20,10 +20,13 @@
         android:label="Prius Monitor"
         android:allowBackup="false"
         android:theme="@style/BetsyTheme">
-        <service android:name=".monitor.MonitorService" android:exported="false" android:foregroundServiceType="connectedDevice" />
+        <service android:name=".monitor.MonitorService" android:exported="false" android:foregroundServiceType="connectedDevice" android:stopWithTask="false" />
         <activity
             android:name=".monitor.MonitorActivity"
-            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden"
+            android:supportsPictureInPicture="true"
+            android:resizeableActivity="true"
+            android:launchMode="singleTask"
             android:exported="true"
             android:theme="@style/BetsyTheme">
             <intent-filter>

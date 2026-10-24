@@ -32,7 +32,7 @@ class MonitorEngine {
     private var tick = 0
     private val meter = TripMeter()
 
-    @Volatile var intervalMs = 1000L
+    @Volatile var intervalMs = LivePolling.DEFAULT_INTERVAL_MS
     var onChanged: (() -> Unit)? = null
     var onReport: ((ScanReport) -> Unit)? = null
     var sample = LiveSample()
@@ -81,11 +81,12 @@ class MonitorEngine {
     private fun publish(
         next: LiveSample,
         id: Int,
+        batteryUpdated: Boolean,
     ) {
         main.post {
             if (id == generation) {
                 sample = next
-                observation.add(next.time, next.battery, SystemClock.elapsedRealtime())
+                if (batteryUpdated) observation.add(next.time, next.battery, SystemClock.elapsedRealtime())
                 history.addLast(next)
                 while (history.size > 180) history.removeFirst()
                 changed()
@@ -146,25 +147,37 @@ class MonitorEngine {
         }
     }
 
-    private fun schedule(id: Int) {
+    private fun schedule(
+        id: Int,
+        delayMs: Long = 0,
+    ) {
         if (id != generation || !connected) return
         polling =
             worker.schedule({
                 if (id == generation && connected) {
+                    val started = SystemClock.elapsedRealtime()
                     try {
-                        val (d, battery, errors) = readSample()
-                        meter.update(SystemClock.elapsedRealtime(), d)
-                        publish(LiveSample(System.currentTimeMillis(), d, battery, errors, meter.snapshot), id)
+                        val reading = readSample()
+                        meter.update(SystemClock.elapsedRealtime(), reading.obd)
+                        // Deliver speed/fuel before any optional ECU can hold up the worker.
+                        publish(
+                            LiveSample(System.currentTimeMillis(), reading.obd, reading.battery, reading.errors, meter.snapshot),
+                            id,
+                            reading.batteryUpdated,
+                        )
+                        if (id == generation && connected) {
+                            awaitBlocking { reader?.readSupplementary() }
+                        }
                     } catch (e: Exception) {
                         fail(id, "Conexiune întreruptă: ${e.message ?: e.javaClass.simpleName}")
                     }
-                    schedule(id)
+                    schedule(id, LivePolling.delayMs(intervalMs, SystemClock.elapsedRealtime() - started))
                 }
-            }, if (tick == 0) 0 else intervalMs, TimeUnit.MILLISECONDS)
+            }, delayMs, TimeUnit.MILLISECONDS)
     }
 
-    private fun readSample(): Triple<ObdData, BatteryModel?, List<String>> {
-        val result = awaitBlocking { (reader ?: error("Sesiune închisă")).read() }
+    private fun readSample(): VehicleReading {
+        val result = awaitBlocking { (reader ?: error("Sesiune închisă")).readLive() }
         tick++
         return result
     }

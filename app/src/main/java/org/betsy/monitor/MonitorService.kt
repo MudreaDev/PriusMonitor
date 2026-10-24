@@ -21,16 +21,14 @@ class MonitorService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var lastNotification = 0L
     private var lastState = ""
-    private val observer: () -> Unit = {
-        if (!app.backgroundRequested || engine.demo || (!engine.connected && !engine.connecting)) {
-            stopSelf()
-        } else {
-            updateNotification()
-        }
-    }
+    private var sessionId = 0L
+    private var lastStartId = 0
+    private var foregroundReady = false
+    private val observer: () -> Unit = { reconcile() }
 
     override fun onCreate() {
         super.onCreate()
+        sessionId = app.backgroundSessionId
         try {
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(NotificationChannel(CHANNEL, "Conexiune OBD activă", NotificationManager.IMPORTANCE_LOW))
@@ -40,7 +38,7 @@ class MonitorService : Service() {
             } else {
                 startForeground(ID, notification)
             }
-            app.backgroundRequested = true
+            foregroundReady = true
             app.backgroundRunning = true
             app.lastServiceStart = SystemClock.elapsedRealtime()
             wakeLock =
@@ -50,7 +48,7 @@ class MonitorService : Service() {
                 }
             engine.addObserver(observer)
         } catch (e: Exception) {
-            app.backgroundRequested = false
+            app.finishBackgroundSession(sessionId)
             engine.disconnect("Monitorizarea în fundal nu a putut porni: ${e.message}")
             stopSelf()
         }
@@ -61,13 +59,38 @@ class MonitorService : Service() {
         flags: Int,
         startId: Int,
     ): Int {
+        lastStartId = startId
+        if (!foregroundReady) {
+            stopSelfResult(startId)
+            return START_NOT_STICKY
+        }
+        val requestedSession = intent?.getLongExtra(EXTRA_SESSION_ID, app.backgroundSessionId) ?: 0L
         if (intent?.action == ACTION_STOP) {
-            engine.disconnect("Oprit din notificare")
-            stopSelf()
-        } else if (engine.demo || (!engine.connected && !engine.connecting)) {
-            stopSelf()
+            // A notification left over from an earlier session cannot stop a new connection.
+            if (requestedSession == app.backgroundSessionId) {
+                sessionId = requestedSession
+                app.finishBackgroundSession(sessionId)
+                engine.disconnect("Oprit din notificare")
+                stopSelfResult(startId)
+            }
+        } else if (intent != null && requestedSession == app.backgroundSessionId) {
+            sessionId = requestedSession
+            reconcile(force = true)
+        } else if (!app.backgroundRequested || (!engine.connected && !engine.connecting)) {
+            stopSelfResult(startId)
         }
         return START_NOT_STICKY
+    }
+
+    private fun reconcile(force: Boolean = false) {
+        if (!foregroundReady || sessionId != app.backgroundSessionId) return
+        if (!app.backgroundRequested || engine.demo || (!engine.connected && !engine.connecting)) {
+            app.finishBackgroundSession(sessionId)
+            // Do not cancel a connect request already queued by Android but not delivered yet.
+            if (lastStartId > 0) stopSelfResult(lastStartId)
+        } else {
+            updateNotification(force)
+        }
     }
 
     private fun notification(): Notification {
@@ -84,16 +107,27 @@ class MonitorService : Service() {
             PendingIntent.getService(
                 this,
                 2,
-                Intent(this, MonitorService::class.java).setAction(ACTION_STOP),
+                Intent(this, MonitorService::class.java)
+                    .setAction(ACTION_STOP)
+                    .putExtra(EXTRA_SESSION_ID, sessionId),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
+        val readings =
+            MiniMonitorReadings.from(
+                engine.sample,
+                engine.connected,
+                engine.connecting,
+                getSharedPreferences("prius-monitor", MODE_PRIVATE).getBoolean("imperial", false),
+            )
+        val text = if (engine.connected) readings.notificationLine else engine.status
+        val details = if (engine.scanning) "$text\nDiagnosticare în curs." else text
         return Notification
             .Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_monitor_notification)
             .setContentTitle(if (engine.connected) "Prius Monitor · conectat" else "Prius Monitor · conectare")
-            .setContentText(
-                if (engine.scanning) "Diagnosticare în curs. Atinge pentru detalii." else "Monitorizare OBD și înregistrare a călătoriei.",
-            ).setSubText(engine.adapter)
+            .setContentText(text)
+            .setStyle(Notification.BigTextStyle().bigText(details))
+            .setSubText(engine.adapter)
             .setContentIntent(open)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
@@ -103,10 +137,10 @@ class MonitorService : Service() {
     }
 
     @SuppressLint("MissingPermission") // Notification permission is optional for an FGS; see Android's FGS contract.
-    private fun updateNotification() {
+    private fun updateNotification(force: Boolean = false) {
         val now = SystemClock.elapsedRealtime()
-        val state = "${engine.connected}/${engine.connecting}/${engine.scanning}"
-        if (state == lastState && now - lastNotification < 15000) return
+        val state = "${engine.connected}/${engine.connecting}/${engine.scanning}/${engine.status}"
+        if (!force && state == lastState && now - lastNotification < 2000) return
         lastState = state
         lastNotification = now
         try {
@@ -122,13 +156,17 @@ class MonitorService : Service() {
 
     override fun onDestroy() {
         engine.removeObserver(observer)
-        val shouldCloseConnection = app.backgroundRequested
+        foregroundReady = false
         app.backgroundRunning = false
-        app.backgroundRequested = false
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
-        if (shouldCloseConnection && !engine.demo && (engine.connected || engine.connecting)) {
-            engine.disconnect("Serviciul de monitorizare a fost oprit")
+        // stopSelf is asynchronous. A new connect may arrive before this old instance dies.
+        if (sessionId == app.backgroundSessionId) {
+            val shouldCloseConnection = app.backgroundRequested
+            app.finishBackgroundSession(sessionId)
+            if (shouldCloseConnection && !engine.demo && (engine.connected || engine.connecting)) {
+                engine.disconnect("Serviciul de monitorizare a fost oprit")
+            }
         }
         stopForeground(STOP_FOREGROUND_REMOVE)
         super.onDestroy()
@@ -136,6 +174,7 @@ class MonitorService : Service() {
 
     companion object {
         const val ACTION_STOP = "ro.priusmonitor.app.STOP_OBD"
+        const val EXTRA_SESSION_ID = "ro.priusmonitor.app.OBD_SESSION_ID"
         private const val CHANNEL = "prius-obd-monitoring"
         private const val ID = 3001
     }

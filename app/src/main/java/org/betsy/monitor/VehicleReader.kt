@@ -10,6 +10,13 @@ import org.betsy.elm.NegativeResponseException
 import org.betsy.elm.NoDataException
 import org.betsy.model.BatteryModel
 
+data class VehicleReading(
+    val obd: ObdData,
+    val battery: BatteryModel?,
+    val errors: List<String>,
+    val batteryUpdated: Boolean = false,
+)
+
 /** Testable real-vehicle path. Transport failures propagate; unsupported PIDs stay missing. */
 class VehicleReader(
     private val elm: ElmSession,
@@ -21,8 +28,16 @@ class VehicleReader(
     private val values = mutableMapOf<String, Pair<Float, Long>>()
     private val unavailableUntil = mutableMapOf<String, Long>()
     private val hvUnavailableUntil = mutableMapOf<String, Long>()
-    private var tick = 0
     private var readiness: Pair<ObdReadiness, Long>? = null
+    private var cachedBattery = emptyBattery()
+    private val hvReadAt = mutableMapOf<String, Long>()
+    private val hvErrors = mutableMapOf<String, String>()
+    private var standardSupplementaryIndex = 0
+    private var hybridSupplementaryIndex = 0
+    private var nextSupplementaryHybrid = false
+    private val hvRotation = mutableSetOf<String>()
+    private var hvRotationChanged = false
+    private var batteryUpdatePending = false
 
     suspend fun initialize() {
         // The first physical OBD request can start automatic protocol detection on ELM clones.
@@ -65,101 +80,154 @@ class VehicleReader(
         }
     }
 
-    private suspend fun readPid(pid: String) {
-        val now = clockMs()
-        if (knownPids?.contains(pid) == false || (unavailableUntil[pid] ?: 0) > now) return
+    private fun pidAvailable(pid: String): Boolean = knownPids?.contains(pid) != false && (unavailableUntil[pid] ?: 0) <= clockMs()
+
+    private suspend fun readPid(pid: String): Boolean {
+        if (!pidAvailable(pid)) return false
         val decoded = optional { StandardPid.decode(pid, elm.command("01$pid")) }
         if (decoded == null) {
             values.remove(pid)
-            unavailableUntil[pid] = now + 15000
+            unavailableUntil[pid] = clockMs() + 15000
         } else {
-            values[pid] = decoded to now
+            values[pid] = decoded to clockMs()
+            unavailableUntil.remove(pid)
         }
+        return decoded != null
     }
 
     private suspend fun readReadiness() {
-        val now = clockMs()
-        if (knownPids?.contains("01") == false || (unavailableUntil["01"] ?: 0) > now) return
+        if (!pidAvailable("01")) return
         val decoded = optional { ObdReadiness.decode(elm.command("0101")) }
-        readiness = decoded?.let { it to now }
-        if (decoded == null) unavailableUntil["01"] = now + 15000
+        readiness = decoded?.let { it to clockMs() }
+        if (decoded == null) unavailableUntil["01"] = clockMs() + 15000
     }
 
-    suspend fun read(): Triple<ObdData, BatteryModel?, List<String>> {
+    /** Publish these driving values before spending any time on supplementary diagnostics. */
+    suspend fun readLive(): VehicleReading {
         elm.withEcu("7E0") {
-            if (tick % 5 == 0) readReadiness()
-            for (pid in listOf("0D", "0C", "05", "10", "5E", "42")) readPid(pid)
-            val slow = listOf("0F", "46", "04", "11", "2F", "1F", "06", "07", "0E", "0B")
-            if (tick == 0) {
-                slow.forEach { readPid(it) }
-            } else {
-                slow.chunked(2)[tick % 5].forEach { readPid(it) }
+            readPid("0D")
+            readPid("0C")
+            // Most Prius ECUs need the MAF estimate. A supported direct fuel rate avoids that
+            // extra request; an unavailable direct rate falls back during the same live pass.
+            if (!readPid("5E")) readPid("10")
+        }
+        return snapshot()
+    }
+
+    private data class SupplementaryRequest(
+        val command: String,
+        val hybrid: Boolean = false,
+    )
+
+    private fun hybridCommands(): List<String> =
+        when (info?.model) {
+            VehicleModel.GEN3 -> listOf("2181", "2101", "2198", "2187", "2195")
+            VehicleModel.GEN2 -> listOf("21CE", "21CF", "21D0")
+            else -> emptyList()
+        }
+
+    /** At most one additional ECU query per live pass, including the first pass. */
+    suspend fun readSupplementary() {
+        val standard = listOf("05", "42", "0F", "46", "04", "11", "2F", "1F", "06", "07", "0E", "0B", "10", "01")
+        val hybrid = hybridCommands()
+        // Give HV its own alternating queue: five Gen3 groups refresh within ten live
+        // passes instead of waiting for every optional engine sensor to take a turn.
+        repeat(2 * (standard.size + hybrid.size)) {
+            val hybridTurn = nextSupplementaryHybrid && hybrid.isNotEmpty()
+            nextSupplementaryHybrid = !hybridTurn
+            val request =
+                if (hybridTurn) {
+                    SupplementaryRequest(hybrid[hybridSupplementaryIndex], hybrid = true).also {
+                        hybridSupplementaryIndex = (hybridSupplementaryIndex + 1) % hybrid.size
+                    }
+                } else {
+                    SupplementaryRequest(standard[standardSupplementaryIndex]).also {
+                        standardSupplementaryIndex = (standardSupplementaryIndex + 1) % standard.size
+                    }
+                }
+            if (request.hybrid) {
+                if ((hvUnavailableUntil[request.command] ?: 0) > clockMs()) {
+                    markHybridVisited(request.command, changed = false)
+                    return@repeat
+                }
+                elm.withEcu(if (info?.model == VehicleModel.GEN3) "7E2" else "7E3") {
+                    readHybrid(request.command)
+                }
+                markHybridVisited(request.command, changed = true)
+                return
+            }
+            if (!pidAvailable(request.command)) return@repeat
+            // MAF already arrives in every live pass when the direct fuel rate is unavailable.
+            if (request.command == "10" && values["5E"]?.let { clockMs() - it.second < 15000 } != true) return@repeat
+            elm.withEcu("7E0") {
+                if (request.command == "01") readReadiness() else readPid(request.command)
+            }
+            return
+        }
+    }
+
+    private fun markHybridVisited(
+        command: String,
+        changed: Boolean,
+    ) {
+        hvRotation += command
+        hvRotationChanged = hvRotationChanged || changed
+        if (hvRotation.containsAll(hybridCommands())) {
+            // Cached values may be displayed on every live pass, but only a new complete HV
+            // rotation may enter observation/integration as another battery measurement.
+            batteryUpdatePending = batteryUpdatePending || hvRotationChanged
+            hvRotation.clear()
+            hvRotationChanged = false
+        }
+    }
+
+    private suspend fun readHybrid(command: String) {
+        // Decode into a candidate so an incomplete response cannot partially overwrite a group.
+        val candidate = batteryCopy(cachedBattery)
+        val success =
+            optional {
+                val raw = elm.command(command)
+                when (command) {
+                    "2181" -> Gen3Decoder.decodeBlocks(raw, candidate)
+                    "2101" -> Gen3Decoder.decodeSoc(raw, candidate)
+                    "2198" -> Gen3Decoder.decodeScalars(raw, candidate)
+                    "2187" -> Gen3Decoder.decodeTemps(raw, candidate)
+                    "2195" -> Gen3Decoder.decodeIr(raw, candidate)
+                    "21CE" -> Gen2Decoder.decodeCe(raw, candidate)
+                    "21CF" -> {
+                        Gen2Decoder.decodeCf(raw, candidate, false)
+                        // This app detects the 14-block Prius layout. CF owns no block voltages;
+                        // its decoder's placeholder blocks must not revive a missing CE response.
+                        candidate.blockVolts = cachedBattery.blockVolts.toList()
+                    }
+                    "21D0" -> Gen2Decoder.decodeD0(raw, candidate)
+                }
+                true
+            } == true
+        if (success) {
+            cachedBattery = candidate
+            hvReadAt[command] = clockMs()
+            hvUnavailableUntil.remove(command)
+            hvErrors.remove(command)
+        } else {
+            clearExpiredGroup(cachedBattery, command)
+            hvReadAt.remove(command)
+            hvUnavailableUntil[command] = clockMs() + 15000
+            hvErrors[command] = "$command : parametru indisponibil / răspuns incomplet"
+        }
+    }
+
+    private fun snapshot(): VehicleReading {
+        val now = clockMs()
+        hvReadAt.toMap().forEach { (command, at) ->
+            if (now - at >= 15000) {
+                clearExpiredGroup(cachedBattery, command)
+                hvReadAt.remove(command)
+                hvErrors[command] = "$command : citire expirată · reîncercare automată"
             }
         }
 
-        val errors = mutableListOf<String>()
-        val battery =
-            info?.let { vehicle ->
-                val m = emptyBattery()
-                val readAt = mutableMapOf<String, Long>()
-                elm.withEcu(if (vehicle.model == VehicleModel.GEN3) "7E2" else "7E3") {
-                    suspend fun read(
-                        cmd: String,
-                        decode: (String, BatteryModel) -> Unit,
-                    ) {
-                        val now = clockMs()
-                        if ((hvUnavailableUntil[cmd] ?: 0) > now) {
-                            errors += "$cmd : temporar indisponibil · reîncercare automată"
-                            return
-                        }
-                        // Commit only a complete field group, so a truncated response cannot leave
-                        // partially decoded defaults masquerading as fresh measurements.
-                        val candidate = m.copy()
-                        val success =
-                            optional {
-                                decode(elm.command(cmd), candidate)
-                                true
-                            } == true
-                        if (success) {
-                            readAt[cmd] = clockMs()
-                            hvUnavailableUntil.remove(cmd)
-                            m.soc = candidate.soc
-                            m.currentAmps = candidate.currentAmps
-                            m.aux12V = candidate.aux12V
-                            m.maxChargeHp = candidate.maxChargeHp
-                            m.maxDischargeHp = candidate.maxDischargeHp
-                            m.deltaSoc = candidate.deltaSoc
-                            m.blockVolts = candidate.blockVolts
-                            m.temps = candidate.temps
-                            m.internalResistance = candidate.internalResistance
-                        } else {
-                            hvUnavailableUntil[cmd] = now + 15000
-                            errors += "$cmd : parametru indisponibil / răspuns incomplet"
-                        }
-                    }
-                    if (vehicle.model == VehicleModel.GEN3) {
-                        read("2181", Gen3Decoder::decodeBlocks)
-                        read("2101", Gen3Decoder::decodeSoc)
-                        read("2198", Gen3Decoder::decodeScalars)
-                        read("2187", Gen3Decoder::decodeTemps)
-                        read("2195", Gen3Decoder::decodeIr)
-                    } else {
-                        read("21CE", Gen2Decoder::decodeCe)
-                        read("21CF") { r, b -> Gen2Decoder.decodeCf(r, b, false) }
-                        read("21D0", Gen2Decoder::decodeD0)
-                    }
-                }
-                readAt.forEach { (cmd, at) ->
-                    if (clockMs() - at >= 15000) {
-                        clearExpiredGroup(m, cmd)
-                        errors += "$cmd : citire expirată în timpul ciclului OBD"
-                    }
-                }
-                m
-            }
-
-        // Hybrid reads can be slow. Check age at publication, after all requests completed.
-        fun get(pid: String): Float? = values[pid]?.takeIf { clockMs() - it.second < 15000 }?.first
+        fun get(pid: String): Float? = values[pid]?.takeIf { now - it.second < 15000 }?.first
         val d =
             ObdData(
                 get("0D"),
@@ -178,11 +246,19 @@ class VehicleReader(
                 get("07"),
                 get("0E"),
                 get("0B"),
-                readiness = readiness?.takeIf { clockMs() - it.second < 15000 }?.first,
+                readiness = readiness?.takeIf { now - it.second < 15000 }?.first,
             )
-        tick++
-        return Triple(d, battery, errors)
+        val updated = batteryUpdatePending
+        batteryUpdatePending = false
+        return VehicleReading(d, info?.let { batteryCopy(cachedBattery) }, hvErrors.values.toList(), updated)
     }
+
+    private fun batteryCopy(battery: BatteryModel): BatteryModel =
+        battery.copy(
+            blockVolts = battery.blockVolts.toList(),
+            temps = battery.temps.toList(),
+            internalResistance = battery.internalResistance.toList(),
+        )
 
     private fun clearExpiredGroup(
         m: BatteryModel,

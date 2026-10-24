@@ -1,9 +1,14 @@
 package org.betsy.monitor
 
+import android.Manifest
+import android.accessibilityservice.AccessibilityService
 import android.app.Activity
 import android.app.Instrumentation
+import android.app.NotificationManager
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Rect
+import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
@@ -39,7 +44,14 @@ class MonitorInstrumentation : Instrumentation() {
                 .edit()
                 .clear()
                 .putBoolean("first", false)
+                .putBoolean("background_monitoring", false)
                 .commit()
+            if (Build.VERSION.SDK_INT >= 31) {
+                uiAutomation.grantRuntimePermission(targetContext.packageName, Manifest.permission.BLUETOOTH_CONNECT)
+            }
+            if (Build.VERSION.SDK_INT >= 33) {
+                uiAutomation.grantRuntimePermission(targetContext.packageName, Manifest.permission.POST_NOTIFICATIONS)
+            }
             activity = startActivitySync(Intent(targetContext, MonitorActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             waitForIdleSync()
             step("Compact Live opens without scrolling or invented telemetry") {
@@ -66,44 +78,20 @@ class MonitorInstrumentation : Instrumentation() {
                 click("Live")
             }
             step("Compact values use the real decoder path with a test-only transport fixture") {
-                val replay =
-                    ReplayTransport(
-                        mapOf(
-                            "ATZ" to "ELM327 v1.5",
-                            "0100" to "4100FFFFFFFF",
-                            "0120" to "4120FFFFFFFF",
-                            "0140" to "4140FFFFFFFF",
-                            "7E0/010D" to "410D3C",
-                            "7E0/010C" to "410C1770",
-                            "7E0/0105" to "41057A",
-                            "7E0/0110" to "411003E8",
-                            "7E0/015E" to "415E003C",
-                            "7E0/0142" to "41423714",
-                            "7E2/2181" to "6181" + "2E1B".repeat(14) + "AF24",
-                            "7E2/2101" to "6101" + "00".repeat(21) + "99",
-                            "7E2/2198" to "619883E899AA64",
-                            "7E2/2187" to "618700005A005A005A00",
-                            "7E2/2195" to "6195" + "19".repeat(14),
-                        ),
-                    )
                 runOnMainSync {
                     app.engine.intervalMs = 500
-                    app.engine.connect("TEST · decoder fixture") {
-                        object : ConnectableTransport {
-                            override var readTimeoutMs = 2500
-
-                            override fun connect() {}
-
-                            override suspend fun send(cmd: String) = replay.send(cmd)
-
-                            override fun close() {
-                                replay.close()
-                            }
-                        }
-                    }
+                    check(app.connect("TEST · decoder fixture", ::replayTransport) == null)
                 }
-                waitUntil { app.engine.sample.trip.average != null }
+                waitUntil {
+                    val sample = app.engine.sample
+                    sample.trip.average != null &&
+                        app.backgroundRunning &&
+                        sample.obd.coolant == 82f &&
+                        sample.obd.voltage == 14.1f &&
+                        sample.battery?.blockVolts?.size == 14
+                }
                 check(!app.engine.demo)
+                check(app.backgroundRequested)
                 check(texts().contains("60"))
                 check(texts().contains("5,0"))
                 check(texts().contains("l/100 km · 20,0 km/l"))
@@ -120,9 +108,96 @@ class MonitorInstrumentation : Instrumentation() {
                 check(views().any { it === before })
                 assertCompactFits()
             }
+            step("Home keeps the connection alive and shows three live readings when PiP is supported") {
+                val journey = app.engine.journeyKey
+                val timestamp = app.engine.sample.time
+                pressHome()
+                if (supportsPictureInPicture()) {
+                    waitUntil { activity.isInPictureInPictureMode }
+                    assertMiniFits()
+                    screenshot("mini-home-valori-test")
+                } else {
+                    waitUntil { !activity.hasWindowFocus() }
+                }
+                waitUntil { app.engine.sample.time > timestamp + 1000 }
+                check(app.engine.connected && app.backgroundRunning)
+                check(app.engine.journeyKey == journey)
+                if (supportsPictureInPicture()) assertMiniFits()
+            }
+            step("Closing the minimized activity preserves the connection and trip on return") {
+                val journey = app.engine.journeyKey
+                val timestamp = app.engine.sample.time
+                val distance = app.engine.sample.trip.distanceKm
+                runOnMainSync { activity.finish() }
+                waitUntil { activity.isDestroyed }
+                waitUntil { app.engine.sample.time > timestamp + 1000 }
+                check(app.engine.connected && app.backgroundRunning)
+                check(app.engine.journeyKey == journey)
+                activity = startActivitySync(Intent(targetContext, MonitorActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                waitUntil { texts().contains("LIVE · Prius Monitor") }
+                check(app.engine.journeyKey == journey)
+                check(app.engine.sample.trip.distanceKm >= distance)
+                assertCompactFits()
+            }
+            step("Disabling the mini window keeps background monitoring active") {
+                click("Acasă")
+                click("Setări")
+                click("Fereastră mică la ieșire: pornită")
+                check(!targetContext.getSharedPreferences("prius-monitor", 0).getBoolean("mini_window", true))
+                val journey = app.engine.journeyKey
+                val timestamp = app.engine.sample.time
+                pressHome()
+                waitUntil { !activity.hasWindowFocus() }
+                waitUntil { app.engine.sample.time > timestamp + 1000 }
+                check(!activity.isInPictureInPictureMode)
+                check(app.engine.connected && app.backgroundRunning)
+                check(app.engine.journeyKey == journey)
+                restoreActivity()
+                check(app.engine.journeyKey == journey)
+                click("Fereastră mică la ieșire: oprită")
+                click("Live")
+                assertCompactFits()
+            }
+            step("Back from Live minimizes the active session without resetting its trip") {
+                val journey = app.engine.journeyKey
+                val timestamp = app.engine.sample.time
+                runOnMainSync { activity.onBackPressed() }
+                if (supportsPictureInPicture()) {
+                    waitUntil { activity.isInPictureInPictureMode }
+                    assertMiniFits()
+                    screenshot("mini-back-valori-test")
+                } else {
+                    waitUntil { !activity.hasWindowFocus() }
+                }
+                waitUntil { app.engine.sample.time > timestamp + 1000 }
+                check(app.engine.connected && app.backgroundRunning)
+                check(app.engine.journeyKey == journey)
+            }
+            step("The notification Stop action ends the connection and background service") {
+                val stop =
+                    targetContext
+                        .getSystemService(NotificationManager::class.java)
+                        .activeNotifications
+                        .flatMap {
+                            it.notification.actions
+                                ?.toList()
+                                .orEmpty()
+                        }.single { it.title.toString() == "Oprește conexiunea" }
+                runOnMainSync { stop.actionIntent.send() }
+                waitUntil { !app.engine.connected && !app.engine.connecting && !app.backgroundRunning }
+                check(app.engine.status == "Oprit din notificare")
+                check(!app.backgroundRequested)
+                if (!activity.isDestroyed) {
+                    runOnMainSync { activity.finish() }
+                    waitUntil { activity.isDestroyed }
+                }
+                activity = startActivitySync(Intent(targetContext, MonitorActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                waitUntil { texts().contains("LIVE · Prius Monitor") }
+                check(texts().count { it == "—" } >= 10)
+            }
             step("Connection error is remembered and can be copied") {
                 runOnMainSync {
-                    app.engine.connect("TEST · connection failure") {
+                    app.connect("TEST · connection failure") {
                         object : ConnectableTransport {
                             override var readTimeoutMs = 2500
 
@@ -182,9 +257,96 @@ class MonitorInstrumentation : Instrumentation() {
         }
     }
 
+    private fun supportsPictureInPicture() = targetContext.packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
+
+    private fun pressHome() {
+        check(uiAutomation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME))
+    }
+
+    private fun restoreActivity() {
+        runOnMainSync {
+            targetContext.startActivity(
+                Intent(targetContext, MonitorActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            )
+        }
+        waitUntil { activity.hasWindowFocus() && !activity.isInPictureInPictureMode }
+        waitForIdleSync()
+    }
+
+    private fun assertMiniFits() {
+        waitUntilMiniReady()
+        val dashboard = views().filterIsInstance<MiniDashboardView>().single { it.isShown }
+        check(views().filterIsInstance<CompactDashboard>().none { it.isShown })
+        val visible = texts()
+        check(visible.containsAll(listOf("VITEZĂ", "CONSUM LIVE", "CONSUM MEDIU", "60", "km/h")))
+        check(visible.count { it == "5,0" } == 2)
+        assertReadingsFit(dashboard)
+    }
+
+    private fun waitUntilMiniReady() {
+        fun ready(): Boolean {
+            val dashboard = views().filterIsInstance<MiniDashboardView>().singleOrNull() ?: return false
+            var settled = false
+            runOnMainSync {
+                val visible = Rect()
+                val aspect = if (dashboard.height > 0) dashboard.width.toDouble() / dashboard.height else 0.0
+                settled =
+                    activity.isInPictureInPictureMode &&
+                    dashboard.isShown &&
+                    aspect in 1.4..2.1 &&
+                    dashboard.getGlobalVisibleRect(visible) &&
+                    visible.width() == dashboard.width &&
+                    visible.height() == dashboard.height
+            }
+            return settled
+        }
+        waitUntil(::ready)
+        Thread.sleep(500)
+        waitUntil(::ready)
+    }
+
+    private fun replayTransport(): ConnectableTransport {
+        val replay =
+            ReplayTransport(
+                mapOf(
+                    "ATZ" to "ELM327 v1.5",
+                    "0100" to "4100FFFFFFFF",
+                    "0120" to "4120FFFFFFFF",
+                    "0140" to "4140FFFFFFFF",
+                    "7E0/010D" to "410D3C",
+                    "7E0/010C" to "410C1770",
+                    "7E0/0105" to "41057A",
+                    "7E0/0110" to "411003E8",
+                    "7E0/015E" to "415E003C",
+                    "7E0/0142" to "41423714",
+                    "7E2/2181" to "6181" + "2E1B".repeat(14) + "AF24",
+                    "7E2/2101" to "6101" + "00".repeat(21) + "99",
+                    "7E2/2198" to "619883E899AA64",
+                    "7E2/2187" to "618700005A005A005A00",
+                    "7E2/2195" to "6195" + "19".repeat(14),
+                ),
+            )
+        return object : ConnectableTransport {
+            override var readTimeoutMs = 2500
+
+            override fun connect() {}
+
+            override suspend fun send(cmd: String) = replay.send(cmd)
+
+            override fun close() {
+                replay.close()
+            }
+        }
+    }
+
     private fun assertCompactFits() {
         check(views().none { it is ScrollView && it.isShown })
         val dashboard = views().filterIsInstance<CompactDashboard>().single()
+        assertReadingsFit(dashboard)
+    }
+
+    private fun assertReadingsFit(dashboard: View) {
         runOnMainSync {
             val bounds = Rect()
             check(dashboard.getGlobalVisibleRect(bounds))
@@ -235,7 +397,8 @@ class MonitorInstrumentation : Instrumentation() {
     }
 
     private fun screenshot(name: String) {
-        Thread.sleep(500)
+        Thread.sleep(if (activity.isInPictureInPictureMode) 2000 else 500)
+        if (activity.isInPictureInPictureMode) waitUntilMiniReady()
         val bitmap = uiAutomation.takeScreenshot() ?: return
         File(targetContext.getExternalFilesDir(null), "$name.png").outputStream().use {
             bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)

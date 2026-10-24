@@ -25,6 +25,10 @@ class MonitorApplication : Application() {
     private var activeId: Long? = null
 
     @Volatile var backgroundRequested = false
+        private set
+
+    @Volatile var backgroundSessionId = 0L
+        private set
 
     @Volatile var backgroundRunning = false
 
@@ -58,19 +62,8 @@ class MonitorApplication : Application() {
         device: BluetoothDevice,
         name: String,
         ble: Boolean = false,
-    ): String? {
-        val background = getSharedPreferences("prius-monitor", MODE_PRIVATE).getBoolean("background_monitoring", true)
-        backgroundRequested = background
-        var warning: String? = null
-        if (background) {
-            try {
-                startForegroundService(Intent(this, MonitorService::class.java))
-            } catch (_: Exception) {
-                backgroundRequested = false
-                warning = "Monitorizarea în fundal nu a putut porni. Păstrează aplicația deschisă."
-            }
-        }
-        engine.connect("$name · ${if (ble) "BLE" else "SPP"}") {
+    ): String? =
+        connect("$name · ${if (ble) "BLE" else "SPP"}") {
             val link = if (ble) BleElmTransport(this, device) else DeadlineBluetoothTransport(device)
             val capture =
                 if (getSharedPreferences("prius-monitor", MODE_PRIVATE).getBoolean("technical_capture", false)) {
@@ -80,7 +73,30 @@ class MonitorApplication : Application() {
                 }
             if (capture == null) link else RecordingTransport(link, capture)
         }
-        return warning
+
+    internal fun connect(
+        name: String,
+        transportFactory: () -> ConnectableTransport,
+    ): String? {
+        // Background continuity belongs to every real connection, including users who had
+        // disabled the old preference. Establish connecting state before service callbacks.
+        val sessionId = ++backgroundSessionId
+        backgroundRequested = true
+        engine.connect(name, transportFactory)
+        return try {
+            startForegroundService(
+                Intent(this, MonitorService::class.java).putExtra(MonitorService.EXTRA_SESSION_ID, sessionId),
+            )
+            null
+        } catch (_: Exception) {
+            finishBackgroundSession(sessionId)
+            "Monitorizarea în fundal nu a putut porni. Păstrează aplicația deschisă."
+        }
+    }
+
+    /** A late teardown of the previous service must never clear a newer connection request. */
+    fun finishBackgroundSession(sessionId: Long) {
+        if (backgroundSessionId == sessionId) backgroundRequested = false
     }
 
     private fun write(block: () -> Unit) {

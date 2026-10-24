@@ -4,6 +4,9 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.PendingIntent
+import android.app.PictureInPictureParams
+import android.app.RemoteAction
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
@@ -11,14 +14,18 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.graphics.Color
+import android.graphics.Rect
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.util.Rational
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -41,6 +48,7 @@ class MonitorActivity : Activity() {
     private lateinit var root: LinearLayout
     private lateinit var header: LinearLayout
     private lateinit var compact: CompactDashboard
+    private lateinit var mini: MiniDashboardView
     private lateinit var body: LinearLayout
     private lateinit var scroll: ScrollView
     private lateinit var connection: TextView
@@ -58,6 +66,15 @@ class MonitorActivity : Activity() {
     private var exportPreparing = false
     private var touching = false
     private var uiVisible = true
+    private var enteringMini = false
+    private val refreshVisible =
+        object : Runnable {
+            override fun run() {
+                if (!uiVisible) return
+                refresh()
+                handler.postDelayed(this, 1000)
+            }
+        }
     private var renderPending = false
     private var wasConnected = false
     private var lastAutoSave = 0L
@@ -84,15 +101,28 @@ class MonitorActivity : Activity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         imperial = prefs.getBoolean("imperial", false)
         fahrenheit = prefs.getBoolean("fahrenheit", false)
-        engine.intervalMs = prefs.getLong("interval", 1000)
+        if (!prefs.getBoolean("prioritized_live_polling", false)) {
+            val previousInterval = prefs.getLong("interval", 1000)
+            prefs
+                .edit()
+                .putLong("interval", if (previousInterval <= 1000) LivePolling.DEFAULT_INTERVAL_MS else previousInterval)
+                .putBoolean("prioritized_live_polling", true)
+                .apply()
+        }
+        engine.intervalMs = prefs.getLong("interval", LivePolling.DEFAULT_INTERVAL_MS)
         buildShell()
-        engine.onChanged = {
+        engine.onChanged = changed@{
             if (wasConnected && !engine.connected && engine.sample.time > 0) saveSummary(engine.status)
             if (engine.connected && engine.sample.time - lastAutoSave >= 30000) {
                 saveSummary("Salvare automată în timpul călătoriei")
                 lastAutoSave = engine.sample.time
             }
             wasConnected = engine.connected
+            updateMiniParams()
+            if (isInPictureInPictureMode && !engine.connected && !engine.connecting) {
+                finish()
+                return@changed
+            }
             if (uiVisible) refresh()
         }
         engine.onReport = {
@@ -292,6 +322,8 @@ class MonitorActivity : Activity() {
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
         compact = CompactDashboard(this) { navigate("Conexiune") }.apply { visibility = View.GONE }
         root.addView(compact, LinearLayout.LayoutParams(-1, 0, 1f))
+        mini = MiniDashboardView(this).apply { visibility = View.GONE }
+        root.addView(mini, LinearLayout.LayoutParams(-1, 0, 1f))
         nav =
             LinearLayout(this).apply {
                 setPadding(dp(6), dp(7), dp(6), dp(9))
@@ -329,6 +361,17 @@ class MonitorActivity : Activity() {
 
     private fun render() {
         if (isFinishing || isDestroyed) return
+        if (isInPictureInPictureMode || enteringMini) {
+            header.visibility = View.GONE
+            scroll.visibility = View.GONE
+            compact.visibility = View.GONE
+            nav.visibility = View.GONE
+            mini.visibility = View.VISIBLE
+            mini.update(MiniMonitorReadings.from(engine.sample, engine.connected, engine.connecting, imperial))
+            return
+        }
+        mini.visibility = View.GONE
+        nav.visibility = View.VISIBLE
         val live = page == "Live"
         header.visibility = if (live) View.GONE else View.VISIBLE
         scroll.visibility = if (live) View.GONE else View.VISIBLE
@@ -958,7 +1001,10 @@ class MonitorActivity : Activity() {
         current.addView(label(engine.status, 14f, if (engine.connected) accent else muted))
         gap(current, 6)
         current.addView(label(engine.adapter + "\n" + engine.layout, 12f, muted))
-        if (engine.connected || engine.connecting) action(current, "Deconectează") { disconnectWithSummary("Deconectare manuală") }
+        if (engine.connected || engine.connecting) {
+            action(current, "Minimizează cu date live") { minimizeMonitoring() }
+            action(current, "Deconectează") { disconnectWithSummary("Deconectare manuală") }
+        }
         val lastError = prefs.getString("last_connection_error", "").orEmpty()
         if (lastError.isNotBlank()) {
             val errors = card("Ultima eroare de conexiune")
@@ -1052,7 +1098,7 @@ class MonitorActivity : Activity() {
             ),
         )
         note(
-            "1. Introdu adaptorul în portul OBD și pregătește mașina pentru citire.\n2. Pentru Classic, asociază VIECAR în setările Bluetooth. Pentru BLE, folosește căutarea din aplicație.\n3. Închide Car Scanner și alte aplicații OBD înainte de conectare.\n\nMonitorizarea în fundal poate continua cu o notificare permanentă. Oprește conexiunea din aplicație sau din notificare.",
+            "1. Introdu adaptorul în portul OBD și pregătește mașina pentru citire.\n2. Pentru Classic, asociază VIECAR în setările Bluetooth. Pentru BLE, folosește căutarea din aplicație.\n3. Închide Car Scanner și alte aplicații OBD înainte de conectare.\n\nConexiunea continuă automat în fundal. La ieșire, fereastra mică arată consumul mediu, consumul live și viteza. Închiderea ferestrei mici păstrează conexiunea. Oprește conexiunea din aplicație sau din notificare.",
         )
     }
 
@@ -1077,13 +1123,13 @@ class MonitorActivity : Activity() {
             prefs.edit().putBoolean("fahrenheit", fahrenheit).apply()
             render()
         }
-        action(units, "Interval: ${engine.intervalMs / 1000.0} s") {
-            val times = longArrayOf(500, 1000, 2000, 5000)
+        action(units, "Actualizare Live: ${engine.intervalMs / 1000.0} s") {
+            val times = longArrayOf(250, 500, 1000, 2000, 5000)
             AlertDialog
                 .Builder(
                     this,
-                ).setTitle("Pauză între ciclurile OBD")
-                .setItems(arrayOf("0,5 secunde", "1 secundă", "2 secunde", "5 secunde")) { _, i ->
+                ).setTitle("Interval țintă pentru datele live")
+                .setItems(arrayOf("Rapid · 0,25 secunde", "0,5 secunde", "1 secundă", "2 secunde", "5 secunde")) { _, i ->
                     engine.intervalMs =
                         times[i]
                     ; prefs.edit().putLong("interval", times[i]).apply()
@@ -1091,25 +1137,25 @@ class MonitorActivity : Activity() {
                 }.show()
         }
         metric(units, "Limbă", "Română")
-        action(units, "Monitorizare în fundal: ${if (prefs.getBoolean("background_monitoring", true)) "pornită" else "oprită"}") {
-            val enabled = !prefs.getBoolean("background_monitoring", true)
-            prefs.edit().putBoolean("background_monitoring", enabled).apply()
-            if (enabled &&
-                Build.VERSION.SDK_INT >= 33 &&
-                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-            ) {
-                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 93)
-            }
+        metric(units, "Monitorizare în fundal", "Automată")
+        action(units, "Fereastră mică la ieșire: ${if (prefs.getBoolean("mini_window", true)) "pornită" else "oprită"}") {
+            prefs.edit().putBoolean("mini_window", !prefs.getBoolean("mini_window", true)).apply()
+            updateMiniParams()
             render()
         }
         units.addView(
             label(
-                "Monitorizarea în fundal folosește o notificare permanentă cu buton de oprire și poate crește consumul telefonului. " +
-                    "Setarea se aplică la următoarea conexiune.",
+                "Conexiunea și călătoria continuă când ieși din aplicație sau închizi fereastra mică. " +
+                    "Oprire: Deconectează sau Oprește conexiunea din notificare. Consumul live se afișează în l/h sub 5 km/h.",
                 12f,
                 muted,
             ),
         )
+        if (packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) {
+            action(units, "Permisiunea pentru fereastra mică") {
+                startActivity(Intent("android.settings.PICTURE_IN_PICTURE_SETTINGS", android.net.Uri.parse("package:$packageName")))
+            }
+        }
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
@@ -1117,7 +1163,8 @@ class MonitorActivity : Activity() {
         }
         units.addView(
             label(
-                "Intervalul este pauza dintre cicluri. Citirea efectivă depinde de adaptor și numărul parametrilor disponibili. Consumul rămâne în litri.",
+                "Viteza și consumul au prioritate; ceilalți senzori se citesc pe rând. Intervalul este ținta de actualizare. " +
+                    "Frecvența reală depinde de răspunsul adaptorului. Consumul rămâne în litri.",
                 12f,
                 muted,
             ),
@@ -1492,7 +1539,6 @@ class MonitorActivity : Activity() {
         if (engine.connecting) return
         bleDiscovery.stop(false)
         if (Build.VERSION.SDK_INT >= 33 &&
-            prefs.getBoolean("background_monitoring", true) &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
             !prefs.getBoolean("notification_asked", false)
         ) {
@@ -1595,6 +1641,7 @@ class MonitorActivity : Activity() {
         exportToken = token
         pendingTripCsv = csvTrip
         documentPickerOpen = true
+        updateMiniParams()
         try {
             startActivityForResult(
                 Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
@@ -1606,6 +1653,7 @@ class MonitorActivity : Activity() {
             )
         } catch (_: Exception) {
             documentPickerOpen = false
+            updateMiniParams()
             pendingTripCsv = null
             exportToken = null
             pendingExports.discard(token)
@@ -1619,7 +1667,10 @@ class MonitorActivity : Activity() {
         intent: Intent?,
     ) {
         super.onActivityResult(request, result, intent)
-        if (request == 92) documentPickerOpen = false
+        if (request == 92) {
+            documentPickerOpen = false
+            updateMiniParams()
+        }
         val csvTrip = if (request == 92) pendingTripCsv else null
         val token = if (request == 92) exportToken else null
         if (request == 92) pendingTripCsv = null
@@ -1680,27 +1731,33 @@ class MonitorActivity : Activity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        uiVisible = true
+        handler.removeCallbacks(refreshVisible)
+        handler.post(refreshVisible)
+        updateMiniParams()
+    }
+
     override fun onResume() {
         super.onResume()
-        uiVisible = true
+        enteringMini = false
+        updateMiniParams()
         if (::body.isInitialized) render()
     }
 
     override fun onStop() {
         super.onStop()
         uiVisible = false
+        handler.removeCallbacks(refreshVisible)
         bleDiscovery.stop(false)
-        // The document picker temporarily backgrounds this activity; preserve the trip text
-        // before closing Bluetooth, then let the export complete on return.
-        val canContinue = !engine.demo && app.backgroundRequested
-        if (!documentPickerOpen && !canContinue && (engine.connected || engine.connecting)) {
-            disconnectWithSummary("Aplicația a trecut în fundal")
-        } else if (canContinue && engine.sample.time > 0) {
+        if (engine.connected && engine.sample.time > 0) {
             saveSummary("Monitorizare activă în fundal")
         }
     }
 
     override fun onDestroy() {
+        handler.removeCallbacks(refreshVisible)
         engine.onChanged = null
         engine.onReport = null
         super.onDestroy()
@@ -1714,8 +1771,89 @@ class MonitorActivity : Activity() {
             "Călătorie" -> navigate("Istoric călătorii")
             "Istoric călătorii" -> navigate("Consum")
             "Emisii OBD" -> navigate("Erori")
-            "Acasă" -> super.onBackPressed()
+            "Acasă", "Live" -> {
+                if (engine.connected || engine.connecting) minimizeMonitoring() else super.onBackPressed()
+            }
             else -> navigate("Acasă")
         }
+    }
+
+    private fun miniAllowed() =
+        (engine.connected || engine.connecting) &&
+            prefs.getBoolean("mini_window", true) &&
+            !documentPickerOpen &&
+            !isFinishing &&
+            packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
+
+    private fun miniParams(): PictureInPictureParams {
+        val builder = PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9))
+        val area = Rect()
+        if (::root.isInitialized && root.getGlobalVisibleRect(area)) builder.setSourceRectHint(area)
+        if (Build.VERSION.SDK_INT >= 31) builder.setAutoEnterEnabled(miniAllowed()).setSeamlessResizeEnabled(false)
+        val stop =
+            PendingIntent.getService(
+                this,
+                3,
+                Intent(this, MonitorService::class.java)
+                    .setAction(MonitorService.ACTION_STOP)
+                    .putExtra(MonitorService.EXTRA_SESSION_ID, app.backgroundSessionId),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+        builder.setActions(
+            listOf(
+                RemoteAction(
+                    Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel),
+                    "Oprește conexiunea",
+                    "Oprește conexiunea OBD",
+                    stop,
+                ),
+            ),
+        )
+        return builder.build()
+    }
+
+    private fun updateMiniParams() {
+        if (!packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) return
+        runCatching { setPictureInPictureParams(miniParams()) }
+    }
+
+    private fun enterMini(): Boolean {
+        if (!miniAllowed()) return false
+        enteringMini = true
+        render()
+        val entered = runCatching { enterPictureInPictureMode(miniParams()) }.getOrDefault(false)
+        if (!entered) {
+            enteringMini = false
+            render()
+        }
+        return entered
+    }
+
+    private fun minimizeMonitoring() {
+        if (!enterMini()) moveTaskToBack(true)
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (Build.VERSION.SDK_INT < 31) enterMini()
+    }
+
+    override fun onPictureInPictureModeChanged(
+        inPictureInPictureMode: Boolean,
+        newConfig: Configuration,
+    ) {
+        super.onPictureInPictureModeChanged(inPictureInPictureMode, newConfig)
+        enteringMini = false
+        if (inPictureInPictureMode) {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        render()
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        render()
     }
 }
