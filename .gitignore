@@ -17,6 +17,8 @@ tools/__pycache__/
 # Release signing, NEVER commit. Losing these means users must uninstall to update.
 betsy-release.jks
 keystore.properties
+vag-keystore.properties
+vag-release.jks
 
 # Local scratch, not part of the project
 scratch/

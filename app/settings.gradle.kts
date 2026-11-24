@@ -11,4 +11,4 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "PriusMonitor"
+rootProject.name = "VagMonitor"

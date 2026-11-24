@@ -1,98 +1,47 @@
-# Prius Monitor
+# VAG Monitor — Passat B8 1.6 TDI
 
-Aplicație Android în română pentru Toyota Prius 30 / ZVW30, bazată pe [BETSY](https://github.com/alrighdee/BETSY), cu adaptor ELM327 Bluetooth Classic SPP sau BLE UART acceptat.
+Aplicație Android **separată de Prius Monitor**, dezvoltată exclusiv pe branch-ul `feature/vag-monitor`.
+Pachet: `ro.vagmonitor.app`. Se poate instala lângă aplicația Prius, cu date și semnătură proprii.
 
-**[Descarcă APK-ul actual](https://github.com/MudreaDev/PriusMonitor/releases/latest/download/PriusMonitor.apk)** · [Toate versiunile APK](https://github.com/MudreaDev/PriusMonitor/releases)
+## Prima versiune alpha
 
-APK-urile publicate sunt păstrate în GitHub Releases, fiecare la propria versiune, fără expirarea artifactelor temporare din Actions. Adresa de descărcare de mai sus rămâne aceeași pentru versiunea curentă.
+- Bluetooth clasic și BLE, inclusiv transporturile folosite pentru adaptorul VIECAR.
+- Parametri OBD live detectați automat: turație, viteză, temperatură ulei și antigel, presiune rampă diesel, EGR, MAF, consum direct ECU și altele, numai când ECU le oferă.
+- Catalog Passat cu filtrare după anul modelului, căutare și preset ulei/DPF. Definițiile comunitare necesită verificare pe mașină; nu reprezintă senzori garantați.
+- Citire DTC motor și scanare UDS limitată la modulele listate; ștergere confirmată de utilizator, doar cu viteză și turație zero confirmate proaspăt.
+- Raport de diagnoză distribuibil și identificarea calculatoarelor motor/instrumente.
+- Monitorizare în fundal și ecran experimental Android Auto.
 
-## Funcții
+## Instalare și prima conectare
 
-- Dashboard cu viteză, turație, temperatură lichid de răcire, SOC HV, tensiune 12 V și grafice.
-- Consum instantaneu și mediu, l/h separat, litri și timp la viteză 0, distanță, durata călătoriei și sugestii explicate.
-- Baterie: 14 blocuri, tensiuni, diferență max–min, rezistențe interne, temperaturi, curent și putere calculată.
-- Sănătate / SOH: informații despre limitele măsurării și înregistrare pasivă a valorilor HV. Fără procent de sănătate inventat.
-- Diagnosticare motor și Toyota hibrid, explicații în română pentru codurile uzuale, condiții memorate la eroare (freeze frame), monitoare emisii, rapoarte locale și export cu răspunsurile tehnice ECU.
-- Bluetooth Classic și căutare/conexiune BLE UART, permisiuni Android, limite de timp, deconectare și erori explicite.
-- Ecran Live compact cu 15 indicatori, fără derulare, accesibil din bara de jos; setări pentru unități și intervalul de actualizare. Modul Demo a fost eliminat.
+1. Instalează `VAG-Monitor-0.1.0-alpha.1.apk` din release-ul VAG. Nu înlocuiește aplicația Prius.
+2. Închide conexiunea OBD din Prius Monitor / Car Scanner înainte de conectare.
+3. Pune contactul, apasă **Conectare** și selectează adaptorul împerecheat sau **Caută Bluetooth BLE**.
+4. În **Senzori**, alege anul modelului Passat B8 și, opțional, presetul ulei/DPF. Lipsa unui răspuns este afișată ca indisponibilă.
+5. Pentru diagnoză folosește **Erori**. Pentru identificarea ECU folosește **Service**.
 
-## Instalare
+## Limite explicite
 
-1. Deschide APK-ul pe un telefon cu Android 8.0 sau mai nou; permite instalarea din sursa respectivă dacă Android o cere.
-2. Introdu adaptorul în portul OBD și asociază-l în setările Bluetooth ale telefonului, folosind PIN-ul indicat de adaptor.
-3. Pregătește mașina pentru citirea ECU (de regulă, READY), cu mașina în siguranță.
-4. Închide Car Scanner și alte aplicații OBD care pot ocupa adaptorul.
-5. Deschide Conexiune în Prius Monitor, acordă accesul Bluetooth și selectează VIECAR.
-6. Dacă apare o eroare, folosește „Copiază eroarea” din Conexiune pentru a păstra mesajul complet.
+**Alpha pentru testare, fără validare fizică pe Passat/VIECAR.** Nu înseamnă acoperire completă a gamei VAG.
+Partea comună acoperă OBD CAN 11-bit / 500 kbit/s; catalogul extins este numai pentru Passat.
+K-line, TP2.0, DoIP și SFD nu sunt implementate. Datele expiră după 15 secunde; mulți senzori simultani reduc frecvența actualizării.
 
-Permisiunea Bluetooth trebuie acordată pe telefon la prima utilizare. Nu sunt necesare cont, internet, abonament sau Play Store pentru utilizare. Pentru BLE, folosește căutarea de 15 secunde din Conexiune; sunt implementate profilurile FFF0/FFF1/FFF2, FFE0/FFE1, 18F0/2AF0/2AF1 și Nordic UART. Se verifică proprietățile caracteristicilor și inițializarea ELM327; nu se scrie în caracteristici arbitrare. BLE necesită validare pe adaptorul fizic. Android 8–11 cere acces Locație și localizarea activă pentru căutare; aplicația nu citește poziția GPS. Android 12+ cere Dispozitive din apropiere. Căutarea se oprește când părăsești ecranul/aplicația. Classic nu cere permisiunea Locație.
+**Resetarea inspecției și a schimbului de ulei nu este implementată.** Este necesară identificarea calculatorului de bord și o procedură de adaptare verificată. Ștergerea DTC nu resetează service-ul.
 
-## Depanare VIECAR
+**Android Auto este experimental și netestat pe unitatea mașinii.** Instalarea APK-ului nu garantează apariția în launcher-ul Android Auto; host-ul și regulile de distribuție pot bloca aplicația. Nu există aprobare Google Play pentru această versiune.
 
-Dacă inițializarea ATZ / ATE0 primește un răspuns hexazecimal de la ECU, noua citire ignoră acele cadre vechi și așteaptă răspunsul real la comanda de configurare. Legătura Classic trimite întâi un spațiu pentru a întrerupe o citire anterioară și așteaptă 300 ms fără trafic; nu repetă ultima comandă necunoscută printr-un Enter. Timpul și volumul datelor de sincronizare sunt limitate.
+## Dezvoltare
 
-Închide complet Car Scanner și celelalte aplicații OBD, scoate și reintrodu adaptorul, apoi încearcă Bluetooth Classic SPP. Dacă eșuează, copiază eroarea din Conexiune. Un răspuns nepotrivit nu este tratat drept conectare reușită.
-
-Pentru profilurile BLE UART cunoscute, refuzul CCCD cu status ATT 3 / 4 / 6 permite verificarea notificărilor deja active, după activarea rutării locale. Conectarea nu este confirmată înainte de răspunsurile ELM327 și inițializarea citirii ECU. Erorile de autentificare, criptare, deconectare sau expirare a timpului nu folosesc această excepție. Compatibilitatea necesită test fizic.
-
-## Consum și călătorii
-
-Debitul este citit direct din PID 015E dacă ECU îl oferă. Altfel, cu MAF și turație disponibile, se estimează pentru benzină: l/h = MAF[g/s] × 3600 / (14,7 × 745). Estimarea este etichetată; nu identifică sigur tăierea injecției și poate diferi de bord. La turație citită de 0 rpm, consumul de benzină este considerat 0. Energia electrică nu este inclusă.
-
-l/100 km = l/h × 100 / km/h, afișat de la 5 km/h. Media integrează debitul și viteza pe intervalele valide, include opririle și apare după minimum 100 m cu date de consum. Lipsa datelor și intervalele mai lungi de 15 secunde nu creează valori fictive. Acoperirea calculului este afișată.
-
-**Viteză 0 nu înseamnă Parking.** Litrii și timpul la viteză 0 sunt separați, iar călătoria continuă.
-
-Viteza, turația și debitul / MAF se citesc cu prioritate și sunt afișate înaintea senzorilor secundari. Între două citiri live se intercalează cel mult o cerere suplimentară pentru baterie, temperaturi sau alți parametri. Intervalul implicit de 0,25 s este o țintă între începuturile ciclurilor, nu o pauză adăugată după răspunsul adaptorului. Viteza efectivă depinde de adaptor și ECU. Datele bateriei expiră după 15 s; reutilizarea lor pe ecran nu creează observații de baterie noi.
-
-Conexiunea continuă automat în fundal când folosești altă aplicație, stingi ecranul sau închizi ecranul aplicației. Serviciul afișează o notificare cu viteză, consum live, consum mediu și buton de oprire; menține procesorul activ pe durata conexiunii, în limita unei solicitări de 12 ore. Acest mod poate crește consumul telefonului. La deconectare, ultimul rezumat rămâne exportabil din Setări. O conexiune nouă începe o călătorie nouă.
-
-Când apeși Acasă sau Înapoi din Live / Acasă cu o conexiune activă, aplicația se micșorează într-o fereastră Android Picture-in-Picture cu viteză, consum mediu și consum live. Sub 5 km/h, consumul live apare în l/h. Închiderea ferestrei mici păstrează conexiunea și călătoria. Pentru oprire, folosește Deconectează sau Oprește conexiunea din notificare / meniul ferestrei mici. Fereastra se poate dezactiva separat din Setări; conexiunea continuă în fundal. Dacă telefonul nu permite fereastra mică, monitorizarea continuă fără ea. Oprirea forțată a aplicației de către utilizator sau sistem încheie sesiunea; aplicația nu se reconectează singură.
-
-Istoricul salvează automat eșantioanele OBD și rezumatul fiecărei călătorii într-un jurnal SQLite privat. Sunt disponibile grafice și export CSV cu unități explicite, marcaj Demo și câmpuri goale pentru citirile indisponibile. O sesiune întreruptă de oprirea procesului este identificată la următoarea pornire. Rapoartele de diagnostic rămân în spațiul privat al aplicației după repornire; dezinstalarea le șterge. Nu se trimit automat date sau scanări pe internet.
-
-## Limite
-
-Gen 3 este implementat conform decodoarelor BETSY și verificat software. **Nu este declarat validat pe Prius-ul utilizatorului.** Adaptorul și ECU-ul pot refuza parametri, afișați ca — sau note în raport. Nu se substituie valori Demo, zero sau citiri vechi expirate.
-
-Profilul HV vizează pachetul Prius cu 14 blocuri. Nu este un scanner universal pentru orice Toyota. Un rezultat fără coduri nu certifică toate ECU-urile. SOC este încărcarea curentă, nu SOH. Fără un PID SOH documentat sau un test de capacitate validat, SOH rămâne indisponibil. Observațiile tensiunilor nu certifică sănătatea bateriei.
-
-Aplicația citește date. Nu șterge erori și nu include codare, programare, teste de actuatori ori configurarea luminilor.
-
-## Compilare și teste
-
-Necesită JDK 17 și Android SDK 34. Configurează app/local.properties cu sdk.dir sau ANDROID_HOME. Din app:
-
-```text
-./gradlew check assembleDebug assembleDebugAndroidTest --no-daemon
-```
-
-Pe Windows: gradlew.bat. check execută teste unitare, ktlint și Android Lint. APK: app/build/outputs/apk/debug/PriusMonitor-debug.apk.
-
-Cu un emulator pornit, din app:
-
-```text
-adb install -r build/outputs/apk/debug/PriusMonitor-debug.apk
-adb install -r build/outputs/apk/androidTest/debug/PriusMonitor-debug-androidTest.apk
-adb shell am instrument -w ro.priusmonitor.app.test/org.betsy.monitor.MonitorInstrumentation
-```
-
-Runner-ul verifică ecranul Live fără derulare, navigarea fără Demo, valorile dintr-un transport de test inclus exclusiv în APK-ul de test, păstrarea ecranului la actualizare, erorile de conexiune, exportul și recrearea activității. La succes afișează ALL ... DEVICE CHECKS PASSED.
-
-GitHub Actions produce artifactul temporar PriusMonitor-debug-apk după verificări. Aceste construcții au semnătura mediului CI și nu înlocuiesc APK-ul publicat pentru actualizare peste aplicația instalată.
-
-Pentru publicarea unei actualizări, rulează din rădăcina proiectului, cu GitHub CLI autentificat:
+JDK 17, Android SDK 34, Gradle wrapper inclus:
 
 ```powershell
-pwsh -File .\tools\publish-apk.ps1 -ApkPath '..\PriusMonitor-Live-Rapid.apk'
+cd app
+.\gradlew.bat ktlintFormat
+.\gradlew.bat check assembleDebug assembleDebugAndroidTest
 ```
 
-Publică un APK construit și testat în prealabil. Scriptul verifică semnătura APK-ului și faptul că sursa curentă este salvată și încărcată pe GitHub, apoi publică fișierul în GitHub Releases ca `PriusMonitor.apk`, împreună cu suma SHA-256. Poți adăuga `-NotesFile '.\delivery\github-release-notes.md'` pentru notele versiunii. Cheia de semnare rămâne pe calculator; nu este încărcată pe GitHub. Versiunile publicate anterior sunt păstrate, iar adresa permanentă indică ultima versiune publicată.
+Pentru APK semnat: configurație locală `vag-keystore.properties` și `assembleRelease`. Cheile nu se publică.
+[Testele și sursele cercetate](docs/VAG-RESEARCH.md).
 
-## Licență
-
-BETSY: licență MIT; LICENSE și NOTICE sunt păstrate. Documentația originală: [README-BETSY.md](README-BETSY.md), [protocol](docs/PROTOCOL.md). Prius Monitor nu este afiliat oficial cu Toyota.
-
-Observația pasivă păstrează min/max pentru fiecare bloc, contextul diferenței maxime și curentul înregistrat. Fluxul absolut de sarcină (Ah) și energie (kWh) este aproximat prin integrare pe timpul monoton al telefonului, numai între citiri valide la cel mult 15 secunde. Schimbarea sensului între două citiri este tratată explicit. Ambele sensuri se cumulează în modul: nu sunt consum net, capacitate sau SOH. Documentația de bază are mențiuni neuniforme despre polaritatea curentului; interfața păstrează semnul numeric și cere validarea sensului pe mașină, fără etichete neconfirmate de încărcare/descărcare.
-
-Din Setări poate fi activat un jurnal tehnic ELM, oprit implicit. Înregistrează comenzile și răspunsurile adaptorului pentru verificarea compatibilității pe mașină. Ultimele 10 sesiuni sunt păstrate în spațiul privat al aplicației, maximum 4 MB / 50.000 de linii pe sesiune, apoi captura se oprește fără să oprească citirea OBD. Nu se trimite nimic automat. Exportul pregătește o copie a fișierului în fundal și folosește selectorul Android; conținutul unui export în timpul conexiunii reprezintă un snapshot al jurnalului.
+Cod de bază MIT, derivat din proiectul existent și [BETSY](https://github.com/alrighdee/BETSY).
+Definițiile Passat: [OBDb contributors](https://github.com/OBDb/Volkswagen-Passat), CC BY-SA 4.0, licență separată descrisă în `docs/VAG-RESEARCH.md` și în asset-ul NOTICE.

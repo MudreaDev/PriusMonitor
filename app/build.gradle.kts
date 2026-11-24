@@ -17,14 +17,14 @@ ktlint {
 // still succeeds, it just cannot produce an installable release APK.
 val keystoreProps =
     Properties().apply {
-        val f = rootProject.file("../keystore.properties")
+        val f = rootProject.file("../vag-keystore.properties")
         if (f.exists()) f.inputStream().use { load(it) }
     }
 
 // The one place the version is written. release-please rewrites the literal below when it cuts a
 // release, the trailing marker is how it finds the line, so do not move or reword it. versionCode
 // is derived from it so there is never a second number to remember to bump.
-val betsyVersionName = "1.0.0" // x-release-please-version
+val betsyVersionName = "0.1.0-alpha.1" // x-release-please-version
 
 val betsyVersionCode =
     betsyVersionName.substringBefore("-").split(".").let { (major, minor, patch) ->
@@ -38,6 +38,7 @@ fun gitShortIdentity(): String {
     fun run(vararg args: String): String =
         try {
             ProcessBuilder(*args)
+                .apply { environment().keys.removeIf { it.startsWith("GIT_CONFIG_") } }
                 .directory(rootProject.projectDir.parentFile)
                 .redirectErrorStream(true)
                 .start()
@@ -48,7 +49,7 @@ fun gitShortIdentity(): String {
         } catch (_: Exception) {
             ""
         }
-    val hash = run("git", "rev-parse", "--short", "HEAD").ifBlank { "unknown" }
+    val hash = run("git", "rev-parse", "--short", "HEAD").takeIf { it.matches(Regex("[0-9a-f]{7,40}")) } ?: "unknown"
     val dirty = run("git", "status", "--porcelain").isNotEmpty()
     return if (dirty && hash != "unknown") "$hash+" else hash
 }
@@ -65,12 +66,12 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "ro.priusmonitor.app"
+        applicationId = "ro.vagmonitor.app"
         minSdk = 26
         targetSdk = 34
         versionCode = betsyVersionCode
         versionName = betsyVersionName
-        testInstrumentationRunner = "org.betsy.monitor.MonitorInstrumentation"
+        testInstrumentationRunner = "org.betsy.vag.VagInstrumentation"
         buildConfigField("String", "GIT_HASH", "\"$betsyGitHash\"")
         buildConfigField("String", "BUILD_TIME", "\"$betsyBuildTime\"")
         // Hero overlay: "0.0.1 · a1b2c3d+ · <build time>"
@@ -123,6 +124,8 @@ android {
 }
 
 dependencies {
+    implementation("androidx.car.app:app:1.4.0")
+    implementation("androidx.car.app:app-projected:1.4.0")
     testImplementation("junit:junit:4.13.2")
     // android.jar's org.json is a stub that throws "not mocked" under plain JVM unit tests, so
     // anything calling JSONObject is untestable without the real implementation on the test

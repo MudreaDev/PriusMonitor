@@ -1,0 +1,9 @@
+Volkswagen-Passat signal definitions
+Copyright OBDb contributors
+Source: https://github.com/OBDb/Volkswagen-Passat
+Revision: fe25013594a2a7d424706427ec4f4e3f2163d04d
+File: signalsets/v3/default.json (unmodified)
+License: Creative Commons Attribution-ShareAlike 4.0 International
+https://creativecommons.org/licenses/by-sa/4.0/
+Retrieved: 2026-11-23
+No endorsement by OBDb or Volkswagen is implied.

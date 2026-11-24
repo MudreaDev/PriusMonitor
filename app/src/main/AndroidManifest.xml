@@ -15,14 +15,22 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
-        android:name=".monitor.MonitorApplication"
-        android:icon="@mipmap/ic_launcher"
-        android:label="Prius Monitor"
+        android:name=".vag.VagApplication"
+        android:icon="@drawable/vag_icon"
+        android:label="VAG Monitor"
         android:allowBackup="false"
         android:theme="@style/BetsyTheme">
-        <service android:name=".monitor.MonitorService" android:exported="false" android:foregroundServiceType="connectedDevice" android:stopWithTask="false" />
+        <meta-data android:name="com.google.android.gms.car.application" android:resource="@xml/vag_automotive" />
+        <meta-data android:name="androidx.car.app.minCarApiLevel" android:value="1" />
+        <service android:name=".vag.VagService" android:exported="false" android:foregroundServiceType="connectedDevice" />
+        <service android:name=".vag.VagCarService" android:exported="true">
+            <intent-filter>
+                <action android:name="androidx.car.app.CarAppService" />
+                <category android:name="androidx.car.app.category.IOT" />
+            </intent-filter>
+        </service>
         <activity
-            android:name=".monitor.MonitorActivity"
+            android:name=".vag.VagActivity"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden"
             android:supportsPictureInPicture="true"
             android:resizeableActivity="true"
